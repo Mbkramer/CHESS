@@ -18,6 +18,7 @@ WHITE = 'W'
 BLACK = 'B'
 
 PIECE_VALUES = {'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 0}
+CENTI_PAWNS = {'P': 100, 'N': 300, 'B': 325, 'R': 500, 'Q': 900, 'K': float('inf')}
 
 # ── Piece-Square Tables ───────────────────────────────────────────────────────
 # Each table is 64 values, index 0 = a1, index 63 = h8 (white's perspective)
@@ -127,6 +128,169 @@ def get_position_bonus(piece) -> float:
 
 MATE_SCORE = 100000
 
+
+def _pawn_structure(board, color) -> float:
+    """
+    Returns a score (from color's perspective) for pawn structure.
+    Penalties: doubled pawns, isolated pawns.
+    Bonuses:   passed pawns, connected pawns.
+    """
+    opponent = BLACK if color == WHITE else WHITE
+    my_pawns    = [p for p in board.players[color].pieces    if p.name == 'P']
+    opp_pawns   = [p for p in board.players[opponent].pieces if p.name == 'P']
+
+    my_files  = [p.location[0] for p in my_pawns]
+    opp_files = [p.location[0] for p in opp_pawns]
+
+    score = 0.0
+    file_counts = {f: my_files.count(f) for f in set(my_files)}
+
+    opp_pawn_rows = {}
+    for p in opp_pawns:
+        f = p.location[0]
+        r = int(p.location[1])
+        opp_pawn_rows.setdefault(f, []).append(r)
+
+    for pawn in my_pawns:
+        col = pawn.location[0]
+        row = int(pawn.location[1])
+        col_idx = COLUMNS.index(col)
+
+        # ── Doubled pawn penalty ──────────────────────────────────────────
+        if file_counts[col] > 1:
+            score -= 0.3
+
+        # ── Isolated pawn penalty ─────────────────────────────────────────
+        left_file  = COLUMNS[col_idx - 1] if col_idx > 0 else None
+        right_file = COLUMNS[col_idx + 1] if col_idx < 7 else None
+        has_neighbor = (left_file  in my_files) or (right_file in my_files)
+        if not has_neighbor:
+            score -= 0.35
+
+        # ── Connected pawn bonus ──────────────────────────────────────────
+        # A pawn is "connected" if a friendly pawn guards it (diagonally adjacent)
+        if left_file and left_file in my_files:
+            left_pawns = [p for p in my_pawns if p.location[0] == left_file]
+            if any(abs(int(p.location[1]) - row) == 1 for p in left_pawns):
+                score += 0.1
+        if right_file and right_file in my_files:
+            right_pawns = [p for p in my_pawns if p.location[0] == right_file]
+            if any(abs(int(p.location[1]) - row) == 1 for p in right_pawns):
+                score += 0.1
+
+        # ── Passed pawn bonus ─────────────────────────────────────────────
+        # No opposing pawns on the same or adjacent files ahead of this pawn
+        advance_rows = range(row + 1, 9) if color == WHITE else range(1, row)
+        blocking_files = [f for f in [col, left_file, right_file] if f is not None]
+        is_passed = not any(
+            opp_r in advance_rows
+            for f in blocking_files
+            for opp_r in opp_pawn_rows.get(f, [])
+        )
+        if is_passed:
+            # Bonus scales with how far advanced the pawn is
+            advancement = (row - 1) if color == WHITE else (8 - row)
+            score += 0.15 + 0.1 * advancement
+
+    return score
+
+
+def _mobility(board) -> float:
+    """Legal move count difference: positive = white has more mobility."""
+    white_moves = sum(len(p.moves) for p in board.players[WHITE].pieces)
+    black_moves = sum(len(p.moves) for p in board.players[BLACK].pieces)
+    return 0.05 * (white_moves - black_moves)
+
+
+def _king_safety(board, color) -> float:
+    """
+    Dynamic king safety based on:
+      - Pawn shield in front of the king (+)
+      - Open/semi-open files near the king (-)
+      - Enemy piece proximity to the king (-)
+    """
+    opponent = BLACK if color == WHITE else WHITE
+    king_pieces = [p for p in board.players[color].pieces if p.name == 'K']
+    if not king_pieces:
+        return 0.0
+
+    king = king_pieces[0]
+    king_col_idx = COLUMNS.index(king.location[0])
+    king_row     = int(king.location[1])
+
+    score = 0.0
+
+    # ── Pawn shield ───────────────────────────────────────────────────────
+    # The two ranks directly in front of the king should have friendly pawns
+    shield_row = king_row + 1 if color == WHITE else king_row - 1
+    shield_files = [
+        COLUMNS[i] for i in range(
+            max(0, king_col_idx - 1),
+            min(8, king_col_idx + 2)
+        )
+    ]
+    friendly_pawns = {
+        p.location for p in board.players[color].pieces if p.name == 'P'
+    }
+    for f in shield_files:
+        sq = f + str(shield_row)
+        if 1 <= shield_row <= 8 and sq in friendly_pawns:
+            score += 0.15
+
+    # ── Open file penalty ─────────────────────────────────────────────────
+    all_pawn_files = {
+        p.location[0]
+        for side in (WHITE, BLACK)
+        for p in board.players[side].pieces
+        if p.name == 'P'
+    }
+    for f in shield_files:
+        if f not in all_pawn_files:          # fully open file near king
+            score -= 0.25
+        elif f not in {p.location[0] for p in board.players[color].pieces if p.name == 'P'}:
+            score -= 0.1                     # semi-open (opponent pawn only)
+
+    # ── Enemy attacker proximity ──────────────────────────────────────────
+    for piece in board.players[opponent].pieces:
+        if piece.name in ('K', 'P'):
+            continue
+        opp_col = COLUMNS.index(piece.location[0])
+        opp_row = int(piece.location[1])
+        dist = max(abs(opp_col - king_col_idx), abs(opp_row - king_row))
+        if dist <= 2:
+            score -= 0.15 * PIECE_VALUES[piece.name] / 5.0
+
+    return score
+
+
+def _bishop_pair(board, color) -> float:
+    bishops = [p for p in board.players[color].pieces if p.name == 'B']
+    return 0.3 if len(bishops) >= 2 else 0.0
+
+
+def _rook_on_open_file(board, color) -> float:
+    """Bonus for rooks on open or semi-open files."""
+    score = 0.0
+    all_pawn_files = {
+        p.location[0]
+        for side in (WHITE, BLACK)
+        for p in board.players[side].pieces
+        if p.name == 'P'
+    }
+    friendly_pawn_files = {
+        p.location[0] for p in board.players[color].pieces if p.name == 'P'
+    }
+    for piece in board.players[color].pieces:
+        if piece.name != 'R':
+            continue
+        f = piece.location[0]
+        if f not in all_pawn_files:
+            score += 0.25       # fully open file
+        elif f not in friendly_pawn_files:
+            score += 0.1        # semi-open (no friendly pawn)
+    return score
+
+
 def evaluate_terminal(board, color, depth):
     opponent = BLACK if color == WHITE else WHITE
 
@@ -153,11 +317,24 @@ def evaluate(board, color) -> float:
     classical = 0.0
     for piece in board.players[WHITE].pieces:
         classical += PIECE_VALUES[piece.name] + get_position_bonus(piece)
-
     for piece in board.players[BLACK].pieces:
         classical -= PIECE_VALUES[piece.name] + get_position_bonus(piece)
 
-    score = 0.9 * model_score + 0.3 * classical
+    classical += _pawn_structure(board, WHITE)
+    classical -= _pawn_structure(board, BLACK)
+
+    classical += _mobility(board)
+
+    classical += _king_safety(board, WHITE)
+    classical -= _king_safety(board, BLACK)
+
+    classical += _bishop_pair(board, WHITE)
+    classical -= _bishop_pair(board, BLACK)
+
+    classical += _rook_on_open_file(board, WHITE)
+    classical -= _rook_on_open_file(board, BLACK)
+
+    score = 0.4 * model_score + 0.6 * classical
 
     return score if color == WHITE else -score
 
@@ -321,7 +498,7 @@ def minimax(board, depth: int, turn: str, root_color: str,
 # ── Best Move ────────────────────────────────────────────────────────────────
 
 
-def best_move(board, color, depth=3, repertoire_name="balanced", use_opening_book=True):
+def best_move(board, color, depth=4, repertoire_name="balanced", use_opening_book=True):
 
     if use_opening_book:
         book_choice = choose_book_move(board, color, repertoire_name=repertoire_name)

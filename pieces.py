@@ -84,11 +84,16 @@ class Pawn(Piece):
         # White Pawn
         if self.color == WHITE:
 
+            step_one_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 1}")
+            step_two_occupied = True
+            if self.location == self.starting_location:
+                step_two_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 2}")
+
             # Step Forward
-            if self.location == self.starting_location and not _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 2}"):
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) + 2}")
-            if not _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 1}"):
+            if not step_one_occupied:
                 self.moves.append(f"{self.location[0]}{int(self.location[1]) + 1}")
+            if self.location == self.starting_location and not step_one_occupied and not step_two_occupied:
+                self.moves.append(f"{self.location[0]}{int(self.location[1]) + 2}")
 
             # Capture Diagonally
             ascii_value = ord(self.location[0])
@@ -160,10 +165,16 @@ class Pawn(Piece):
                 
         # Black Pawn
         elif self.color == BLACK:
-            if self.location == self.starting_location and not _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 2}"):
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) - 2}")
-            if not _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 1}"):
+
+            step_one_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 1}")
+            step_two_occupied = True
+            if self.location == self.starting_location:
+                step_two_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 2}")
+
+            if not step_one_occupied:
                 self.moves.append(f"{self.location[0]}{int(self.location[1]) - 1}")
+            if self.location == self.starting_location and not step_one_occupied and not step_two_occupied:
+                self.moves.append(f"{self.location[0]}{int(self.location[1]) - 2}")
             
             # Capture Diagonally
             ascii_value = ord(self.location[0])
@@ -562,6 +573,7 @@ class Queen(Piece):
                     break
 
 class King(Piece):
+
     def __init__(self, color: str, location: str, i: int):
         if i > 0:
             id = f'{color}K{i}'
@@ -639,9 +651,8 @@ class King(Piece):
                 if spot is None or spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
 
-
             # Castling
-            if self.location == self.starting_location:
+            if self.location == self.starting_location and self.check == False:
                 # Check for Kingside Castling
                 if _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None:
                     rook = _check_tile_piece(board, f"{chr(ascii_col + 3)}{row}")

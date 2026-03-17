@@ -16,7 +16,7 @@ def player_menu(chess_board, turn) -> bool:
 
     opp = BLACK if turn == WHITE else WHITE
 
-    #TODO TEMP FOR SHOWING ALL LIVE GAMES print("\033c", end="", flush=True)
+    print("\033c", end="", flush=True)
     print(f"{COLORS[turn]} turn.\n")
 
     chess_board._draw_ascii_board()
@@ -86,8 +86,6 @@ def game_loop(chess_board: ChessBoard, game_input):
 
         bot_color = BLACK if game_input[1] == WHITE else WHITE
 
-        print(f"TEMP: BOT REP: {repertoire}")
-
     # 2p Game
     if game_input[0] == '2p':
         while running:
@@ -115,7 +113,7 @@ def game_loop(chess_board: ChessBoard, game_input):
                 
                 print("Waiting on bot move..\n")
 
-                move = best_move(chess_board, bot_color, repertoire_name=repertoire, depth=3)
+                move = best_move(chess_board, bot_color, repertoire_name=repertoire, depth=4)
                 if move:
                     from_sq, to_sq = move
                     piece = next(p for p in chess_board.players[turn].pieces 
