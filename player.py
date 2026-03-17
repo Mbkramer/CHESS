@@ -15,6 +15,28 @@ COLOR = {"W": "White", "B": "Black"}
 WHITE = 'W'
 BLACK = 'B'
 
+class PlayerAction:
+    def __init__(self, from_tile: str, to_tile: str, piece: Piece, 
+                 captured: Piece = None, castle: str = None, promotion: str = None):
+        
+        self.from_tile  = from_tile
+        self.to_tile    = to_tile
+        self.piece_id   = piece.id       
+        self.piece_name = piece.name     
+        self.captured   = captured.id if captured else None
+        self.castle     = castle
+        self.promotion  = promotion       
+
+    def __str__(self):
+        base = f"{self.piece_id} {self.from_tile} to {self.to_tile}"
+        if self.captured:
+            base += f" takes {self.captured}"
+        if self.castle:
+            base += f" castle {self.castle}"
+        if self.promotion:
+            base += f" promoted to {self.promotion}"
+        return base
+
 class Player: 
     def __init__(self, color: str):
         self.color = color
@@ -33,7 +55,9 @@ class Player:
     def __str__(self):
         return f"{COLOR[self.color]} Pieces: {[str(piece) for piece in self.pieces]} taken_pieces: {[str(piece) for piece in self.taken_pieces]}"
     
-    def take_piece(self, piece: Piece):
+    def take_piece(self, piece: Piece, simulate: bool = True):
+        if simulate:
+            return
         self.taken_pieces.append(piece)
         self.taken_pieces_str += f" {piece.name}"
         self.points += piece.value
@@ -41,25 +65,39 @@ class Player:
     def _log_action(self, action: str):
         self.actions.append(action)
 
+
     def update_moves(self, board, opp_actions) -> None:
+        # Always regenerate raw moves first
+        for piece in self.pieces:
+            piece.set_moves(board, opp_actions)
+
+        # If in check, possible_moves must be a list of (from_location, to_location) pairs
         if self.checked:
-            # Build a set of (piece_location, move) pairs
-            valid = set(self.possible_moves)
+            valid_pairs = set(self.possible_moves)
+
             for piece in self.pieces:
-                piece.set_moves(board, opp_actions)
-                piece.moves = [move for move in piece.moves
-                            if (piece.location, move) in valid]  # ← filter by pair
-        else:
-            self.possible_moves = []
-            for piece in self.pieces:
-                piece.set_moves(board, opp_actions)
-                self.possible_moves += piece.moves
+                piece.moves = [
+                    move for move in piece.moves
+                    if (piece.location, move) in valid_pairs
+                ]
+
+        # Rebuild aggregate possible_moves from the current per-piece move lists
+        self.possible_moves = []
+        for piece in self.pieces:
+            for move in piece.moves:
+                self.possible_moves.append((piece.location, move))
 
 
-    def _show_moves(self) -> None:
+    def _show_moves(self, board) -> None:
+
         for piece in self.pieces:
             if len(piece.moves) > 0:
-                print(f"{COLOR[self.color]} {piece.name} at {piece.location} can move to: {piece.moves}")
+                moves_str = ""
+                for move in piece.moves:
+                    if move == board.black_king_location or move == board.white_king_location:
+                        continue
+                    moves_str += f"{move} "
+                print(f"{COLOR[self.color]} {piece.name} at {piece.location} can move to: {moves_str}")
 
     def _init_pieces(self) -> None:
 

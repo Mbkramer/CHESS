@@ -1,6 +1,6 @@
 
 # TILE ASCII
-EMPTY_LIGHT = (
+EMPTY_DARK = (
     "     \n"
     "     \n"
     "     \n"
@@ -8,7 +8,7 @@ EMPTY_LIGHT = (
     "     "
 )
 
-EMPTY_DARK = (
+EMPTY_LIGHT = (
     " ... \n"
     "     \n"
     " ... \n"

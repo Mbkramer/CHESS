@@ -1,7 +1,7 @@
 import copy
 from pieces import Piece, Pawn, Knight, Bishop, Rook, Queen, King
 from ascii_art import ASCII_PIECES
-from player import Player
+from player import Player, PlayerAction
 
 ROWS = ["1", "2", "3", "4", "5", "6", "7", "8"]
 COLUMNS = ["a", "b", "c", "d", "e", "f", "g", "h"]
@@ -31,7 +31,7 @@ class Tile:
         else:
             return self.id
     
-    def is_occupied(self):
+    def _is_occupied(self):
         return self.piece is not None
     
     def place_piece(self, piece: Piece):
@@ -57,6 +57,8 @@ class ChessBoard:
     def __init__(self):
         
         self.board = []
+        self.actions = []
+
         self._init_board_tiles()
 
         self.players = {
@@ -64,7 +66,11 @@ class ChessBoard:
             BLACK: Player(BLACK)
         }
 
+        self.black_king_location = "e8"
+        self.white_king_location = "e1"
+
         self._update_tiles()
+
         self.players[WHITE].update_moves(self.board, [])
         self.players[BLACK].update_moves(self.board, [])
 
@@ -84,7 +90,6 @@ class ChessBoard:
     Print Board
     
     """
-
     # Display current board state with pieces and tile IDs
     def _show_board(self):
         print("     CURRENT BOARD     ")
@@ -117,234 +122,525 @@ class ChessBoard:
 
     """
 
-    # Check if board tile is occupied by a piece
-    def _check_tile_occupied(self, tile_id: str) -> bool:
+    # Get tile
+    def _get_tile(self, tile_id: str) -> Tile:
         for row in self.board:
             for tile in row:
                 if tile.id == tile_id:
-                    return tile.is_occupied()
-        return False
+                    return tile
+        return None
 
-    # Update board tiles with all current piece locations
+    # Check if board tile is occupied by a piece
+    def _check_tile_occupied(self, tile_id: str) -> bool:
+        tile = self._get_tile(tile_id)
+        return tile._is_occupied() if tile else False
+    
+
     def _update_tiles(self) -> None:
-        for piece in self.players[WHITE].pieces + self.players[BLACK].pieces:
-            for row in self.board:
-                for tile in row:
-                    if tile.id == piece.location:
-                        tile.place_piece(piece)
-                    elif tile.piece and tile.piece.location != tile.id:
-                        tile.remove_piece()
+        self._sync_board()
 
-        # Update All Moves
+        # 1. Generate raw moves / attack maps
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self.board, self.players[opp].actions)
 
-        # Update ALL moves first before testing check
+        # 2. Determine check from raw attack maps
+        checked_status = {}
         for color in COLORS:
-            self._cut_illegal_moves(color)   
+            checked_status[color] = self._test_check(color)
 
-        # Reset and check mates
+        # 3. Now cut illegal executable moves
         for color in COLORS:
-            self.players[color].checked = False   
-            self.players[color].mated = False
-            if self._test_check(color):
-                self.players[color].checked = True
-                self.players[color].possible_moves = self._checked(color)
-                if len(self.players[color].possible_moves) == 0:
-                    self.players[color].mated = True
+            self._cut_illegal_moves(color)
+
+        # 4. Rebuild possible move pairs from filtered moves
+        for color in COLORS:
+            self.players[color].possible_moves = []
+            for piece in self.players[color].pieces:
+                for move in piece.moves:
+                    self.players[color].possible_moves.append((piece.location, move))
+
+        # 5. Apply checked / mated flags
+        for color in COLORS:
+            self.players[color].checked = checked_status[color]
+            self.players[color].mated = checked_status[color] and len(self.players[color].possible_moves) == 0
+
+    def _sync_board(self) -> None:
+        # Clear all tiles first
+        for row in self.board:
+            for tile in row:
+                tile.remove_piece()
+
+        # Re-place all active pieces
+        for color in COLORS:
+            for piece in self.players[color].pieces:
+                tile = self._get_tile(piece.location)
+                if tile is None:
+                    raise ValueError(f"Piece {piece} has invalid location {piece.location}")
+                if tile._is_occupied():
+                    raise ValueError(f"Two pieces occupy {piece.location}")
+                if piece.name == "K" and piece.color == WHITE:
+                    self.white_king_location = piece.location
+                if piece.name == "K" and piece.color == BLACK:
+                    self.black_king_location = piece.location
+                    
+                tile.place_piece(piece)
 
     # Remove any move that leaves own king in check.
     def _cut_illegal_moves(self, color) -> None:
-        opp = BLACK if color == WHITE else WHITE
-
         for piece in self.players[color].pieces:
             legal = []
-            for move in piece.moves:
-                test_board = copy.deepcopy(self)
-                test_piece = next(p for p in test_board.players[color].pieces
-                                if p.location == piece.location)
-                test_board._move_piece(test_piece, move, simulate=True)
-                test_board.players[opp].update_moves(test_board.board, self.players[opp].actions)
+            original_moves = list(piece.moves)
+            for move in original_moves:
+                try:
+                    if self._move_is_safe(color, piece, move):
+                        legal.append(move)
 
-                if not test_board._test_check(color):
-                    legal.append(move)
+                except Exception as e:
+                    print(f"_cut_illegal_moves crash: color={color} piece={piece} at {piece.location} move={move}")
+                    raise
+
+                except ValueError as e:
+                    msg = str(e)
+                    if "kings cannot be captured" in msg or "cannot move onto own piece" in msg:
+                        continue
+                    raise
 
             piece.moves = legal
 
-    # Handle Check and Check Mate
-    def _test_check(self, color) -> bool:
 
-        if color == WHITE:
-            opp_color = BLACK
-        elif color == BLACK:
-            opp_color = WHITE
+    def _test_check(self, color) -> bool:
+        opp_color = BLACK if color == WHITE else WHITE
+        king = None
 
         for piece in self.players[color].pieces:
             if piece.name == "K":
-                for opp_piece in self.players[opp_color].pieces:
-                    if piece.location in opp_piece.moves:
-                        piece.check = True
-                        return True
-                return False
-                    
+                king = piece
+                break
+
+        if king is None:
+            raise ValueError(f"No king found for {color}")
+
+        king.check = False
+        for opp_piece in self.players[opp_color].pieces:
+            if king.location in opp_piece.moves:
+                king.check = True
+                return True
+
         return False
+    
 
     def _checked(self, color) -> list:
         moves_out = []
-        opp = BLACK if color == WHITE else WHITE
 
         for piece in self.players[color].pieces:
-            for move in piece.moves:
-                test_board = copy.deepcopy(self)
-                test_piece = next(p for p in test_board.players[color].pieces
-                                if p.location == piece.location)
-
-                test_board._move_piece(test_piece, move, simulate=True)
-                test_board.players[opp].update_moves(test_board.board, self.players[opp].actions)
-
-                if not test_board._test_check(color):
-                    moves_out.append((piece.location, move)) 
+            for move in list(piece.moves):
+                if self._move_is_safe(color, piece, move):
+                    moves_out.append((piece.location, move))
 
         return moves_out
+    
+    def _snapshot_state(self):
+        state = {
+            "checked": {},
+            "mated": {},
+            "possible_moves": {},
+            "player_pieces": {},
+            "player_points": {},
+            "player_actions": {},
+            "player_taken_pieces": {},
+            "player_taken_pieces_str": {},
+            "actions": list(self.actions),
+            "pieces": {},
+        }
+
+        for color in COLORS:
+            player = self.players[color]
+            state["checked"][color] = player.checked
+            state["mated"][color] = player.mated
+            state["possible_moves"][color] = list(getattr(player, "possible_moves", []))
+            state["player_pieces"][color] = list(player.pieces)
+            state["player_points"][color] = player.points
+            state["player_actions"][color] = list(player.actions)
+            state["player_taken_pieces"][color] = list(player.taken_pieces)
+            state["player_taken_pieces_str"][color] = player.taken_pieces_str
+
+            for piece in player.pieces:
+                state["pieces"][id(piece)] = {
+                    "location": piece.location,
+                    "moves": list(piece.moves),
+                    "castle": getattr(piece, "castle", ""),
+                    "starting_location": getattr(piece, "starting_location", None),
+                    "check": getattr(piece, "check", False),
+                }
+
+        return state
 
 
+    def _restore_state(self, state):
+        for color in COLORS:
+            player = self.players[color]
+            player.checked = state["checked"][color]
+            player.mated = state["mated"][color]
+            player.possible_moves = list(state["possible_moves"][color])
+            player.pieces = list(state["player_pieces"][color])
+            player.points = state["player_points"][color]
+            player.actions = list(state["player_actions"][color])
+            player.taken_pieces = list(state["player_taken_pieces"][color])
+            player.taken_pieces_str = state["player_taken_pieces_str"][color]
 
+            for piece in player.pieces:
+                ps = state["pieces"][id(piece)]
+                piece.location = ps["location"]
+                piece.moves = list(ps["moves"])
+                piece.castle = ps["castle"]
+                piece.starting_location = ps["starting_location"]
+                piece.check = ps["check"]
+
+        self.actions = list(state["actions"])
+        self._sync_board()
+
+
+    def _move_is_safe(self, color, piece, move) -> bool:
+        opp = BLACK if color == WHITE else WHITE
+
+        # Do not simulate moves that land on the enemy king square.
+        target_tile = self._get_tile(move)
+
+        if target_tile and target_tile.piece:
+            if target_tile.piece.name == "K":
+                return False
+            if target_tile.piece.color == color:
+                return False
+
+        snap = self._snapshot_state()
+
+        try:
+            self._move_piece(piece, move, simulate=True)
+            self._sync_board()
+
+            self.players[color].update_moves(self.board, self.players[opp].actions)
+            self.players[opp].update_moves(self.board, self.players[color].actions)
+
+            return not self._test_check(color)
+        finally:
+            self._restore_state(snap)
+            
+
+    def _simulate_and_refresh(self, moving_color, piece, move):
+
+        opp = BLACK if moving_color == WHITE else WHITE
+        snap = self._snapshot_state()
+
+        self._move_piece(piece, move, simulate=True)
+        self._sync_board()
+
+        self.players[WHITE].update_moves(self.board, self.players[BLACK].actions)
+        self.players[BLACK].update_moves(self.board, self.players[WHITE].actions)
+
+        self.players[WHITE].checked = self._test_check(WHITE)
+        self.players[BLACK].checked = self._test_check(BLACK)
+
+        return snap
+    
     """
     Manipulate the board
     
     """
 
+    def _is_castle_move(self, piece, from_tile_id, to_tile_id):
+        if piece.name != "K":
+            return None
+        if piece.color == WHITE and from_tile_id == "e1" and to_tile_id == "g1":
+            return "KS"
+        if piece.color == WHITE and from_tile_id == "e1" and to_tile_id == "c1":
+            return "QS"
+        if piece.color == BLACK and from_tile_id == "e8" and to_tile_id == "g8":
+            return "KS"
+        if piece.color == BLACK and from_tile_id == "e8" and to_tile_id == "c8":
+            return "QS"
+        return None
+    
+    def _castle_rook_move(self, color, side):
+        if color == WHITE and side == "KS":
+            rook_from, rook_to = "h1", "f1"
+        elif color == WHITE and side == "QS":
+            rook_from, rook_to = "a1", "d1"
+        elif color == BLACK and side == "KS":
+            rook_from, rook_to = "h8", "f8"
+        else:
+            rook_from, rook_to = "a8", "d8"
+
+        rook_from_tile = self._get_tile(rook_from)
+        rook_to_tile = self._get_tile(rook_to)
+
+        rook = rook_from_tile.piece
+        if rook is None or rook.name != "R":
+            raise ValueError("Invalid castling state: rook missing")
+
+        rook_from_tile.remove_piece()
+        rook_to_tile.place_piece(rook)
+        rook.location = rook_to
+        rook.starting_location = None
+
+    def _last_action(self):
+        if not self.actions:
+            return None
+        return self.actions[-1]
+
+
+    def _is_en_passant_move(self, piece, from_tile_id, to_tile_id):
+        if piece.name != "P":
+            return None
+
+        last_action = self._last_action()
+        if last_action is None:
+            return None
+
+        if last_action.piece_name != "P":
+            return None
+
+        victim_tile = self._get_tile(last_action.to_tile)
+        if victim_tile is None or victim_tile.piece is None:
+            return None
+
+        last_piece = victim_tile.piece
+
+        if last_piece.name != "P":
+            return None
+        if last_piece.color == piece.color:
+            return None
+
+        last_from_rank = int(last_action.from_tile[1])
+        last_to_rank = int(last_action.to_tile[1])
+
+        # Last move must have been a 2-square pawn advance
+        if last_piece.color == WHITE:
+            if not (last_action.from_tile[1] == "2" and last_to_rank - last_from_rank == 2):
+                return None
+            passed_square = f"{last_action.from_tile[0]}3"
+        else:
+            if not (last_action.from_tile[1] == "7" and last_from_rank - last_to_rank == 2):
+                return None
+            passed_square = f"{last_action.from_tile[0]}6"
+
+        if to_tile_id != passed_square:
+            return None
+
+        to_tile = self._get_tile(to_tile_id)
+        if to_tile is None or to_tile._is_occupied():
+            return None
+
+        from_file = ord(from_tile_id[0])
+        to_file = ord(to_tile_id[0])
+        from_rank = int(from_tile_id[1])
+        to_rank = int(to_tile_id[1])
+
+        file_delta = abs(to_file - from_file)
+        rank_delta = to_rank - from_rank if piece.color == WHITE else from_rank - to_rank
+
+        if file_delta != 1 or rank_delta != 1:
+            return None
+
+        return last_piece
+
     # Move piece from one tile to another, updating piece location and board state
-    def _move_piece(self, piece: Piece, to_tile_id: str, simulate: bool = False) -> None:
+    def _move_piece(self, piece: Piece, to_tile_id: str,
+                simulate: bool = False, promotion: str = None) -> None:
 
         from_tile_id = piece.location
+        start_tile = self._get_tile(from_tile_id)
+        target_tile = self._get_tile(to_tile_id)
 
-        for row in self.board:
-            for tile in row:
-                if tile.id == from_tile_id:
-                    tile.remove_piece()
-                elif tile.id == to_tile_id:
+        opponent_color = WHITE if piece.color == BLACK else BLACK
 
-                    # Castle
-                    if not tile.is_occupied() and piece.name == "K":
+        if start_tile is None or target_tile is None:
+            raise ValueError("Invalid move: bad tile id")
+        
+        captured_piece = target_tile.piece
+        if captured_piece != None:
+            if captured_piece.name == "K":
+                raise ValueError("Illegal move: kings cannot be captured")
+            
+            if captured_piece.color == piece.color:
+                raise ValueError(f"Illegal move: {piece} cannot move onto own piece at {to_tile_id}")
 
-                        # Castle King Side
-                        if piece.castle == "KS":
-                            piece.starting_location == None # No more castling
-                            if piece.color == BLACK:
-                                self.board[7][5].place_piece(self.board[7][7].piece)
-                                self.board[7][7].remove_piece()
-                                self.board[7][5].piece.location = self.board[7][5].id
-                                self.board[7][6].place_piece(piece)
-                                piece.location = to_tile_id
-                            if piece.color == WHITE:
-                                self.board[0][5].place_piece(self.board[0][7].piece)
-                                self.board[0][7].remove_piece
-                                self.board[0][5].piece.location = self.board[0][5].id
-                                self.board[0][6].place_piece(piece)
-                                piece.location = to_tile_id
-                                
-                        # Castle Queen Side
-                        if piece.castle == "QS":
-                            piece.starting_location == None # No more castling
-                            if piece.color == BLACK:
-                                self.board[7][4].place_piece(self.board[7][0].piece)
-                                self.board[7][0].remove_piece
-                                self.board[7][4].piece.location = self.board[7][3].id
-                                self.board[7][3].place_piece(piece)
-                                piece.location = to_tile_id
-                            if piece.color == WHITE:
-                                self.board[0][4].place_piece(self.board[0][0].piece)
-                                self.board[0][0].remove_piece
-                                self.board[0][4].piece.location = self.board[0][3].id
-                                self.board[0][3].place_piece(piece)
-                                piece.location = to_tile_id
-                        
-                        # Just Moving King
-                        if piece.castle == "":
-                            piece.starting_location == None # No more castling
-                            self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id}")
-                            tile.place_piece(piece)
-                            piece.location = to_tile_id
+        castle = self._is_castle_move(piece, from_tile_id, to_tile_id)
 
-                    # Pawn Special Case (Promotion)
-                    elif piece.name == "P" and ((piece.color == WHITE and to_tile_id[1] == "8") or (piece.color == BLACK and to_tile_id[1] == "1")):
+        start_tile.remove_piece()
 
-                        if simulate:
-                            # During simulation just move the pawn, no promotion
-                            tile.place_piece(piece)
-                            piece.location = to_tile_id
-                            return
+        # Special Case Castle
+        if castle != None:
 
-                        # In case of capture before promotion
-                        if tile.is_occupied() and tile.piece.color != piece.color:
-                            captured_piece = tile.piece
-                            opponent_color = BLACK if piece.color == WHITE else WHITE
-                            self.players[piece.color].take_piece(captured_piece)
-                            self.players[opponent_color].pieces.remove(captured_piece)
+            piece.starting_location = None
+            self._castle_rook_move(piece.color, castle)
+            target_tile.place_piece(piece)
+            piece.location = to_tile_id
 
-                        # Promote pawn to Q, R, N, or B
-                        # Inheret piece moves
-                        promtions = ['Q', 'R', 'N', 'B']
-                        promotion = ''
-                        while promotion not in promtions:
-                            promotion = str.upper(input("Promoted Pawn: \nType 'Q' for Queen \nType 'R' for Rook \nType 'N' for Night \nType 'B' for Bishop \n").strip())
+            if not simulate:
+                self.players[piece.color]._log_action(PlayerAction(from_tile_id, to_tile_id, piece, castle=castle))
+                self.actions.append(PlayerAction(from_tile_id, to_tile_id, piece, castle=castle))
+            
+            piece.castle = ""
+            return
 
-                        # Inherit Queen
-                        if promotion == 'Q':
-                            self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id}")
-                            queen = Queen(piece.color, to_tile_id, 0)
-                            queen.id = piece.id # Still pawn id tracking
-                            queen.value = piece.id # Still pawn point value
-                            tile.place_piece(queen)
-                            self.players[piece.color].pieces.append(queen) # Add Queen
-                            self.players[piece.color].pieces.remove(piece) # Remove Pawn
+        # Special Case Pawn Promotion
+        if piece.name == "P" and (
+            (piece.color == WHITE and to_tile_id[1] == "8") or
+            (piece.color == BLACK and to_tile_id[1] == "1")
+        ):
+            opponent_color = BLACK if piece.color == WHITE else WHITE
+            captured_piece = None
 
-                        # Inherit Rook
-                        elif promotion == 'R':
-                            self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id}")
-                            rook = Rook(piece.color, to_tile_id, 0)
-                            rook.id = piece.id # Still pawn id tracking
-                            rook.value = piece.id # Still pawn point value
-                            tile.place_piece(rook)
-                            self.players[piece.color].pieces.append(rook) # Add Rook
-                            self.players[piece.color].pieces.remove(piece) # Remove Pawn
+            # Handle capture on promotion square
+            if target_tile._is_occupied():
+                captured_piece = target_tile.piece
 
-                        # Inherit Knight
-                        elif promotion == 'K':
-                            self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id} {promotion}")
-                            knight = Knight(piece.color, to_tile_id, 0)
-                            knight.id = piece.id # Still pawn id tracking
-                            knight.value = piece.id # Still pawn point value
-                            tile.place_piece(knight)
-                            self.players[piece.color].pieces.append(knight) # Add Knight
-                            self.players[piece.color].pieces.remove(piece) # Remove Pawn
+                if captured_piece.color == piece.color:
+                    raise ValueError(f"Illegal move: {piece} cannot move onto own piece at {to_tile_id}")
 
-                        # Inherit Bishop
-                        elif promotion == 'B':
-                            self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id} {promotion}")
-                            bishop = Bishop(piece.color, to_tile_id, 0)
-                            bishop.id = piece.id # Still pawn id tracking
-                            bishop.value = piece.id # Still pawn point value
-                            tile.place_piece(bishop)
-                            self.players[piece.color].pieces.append(bishop) # Add Bishop
-                            self.players[piece.color].pieces.remove(piece) # Remove Pawn
+                if captured_piece.name == "K":
+                    raise ValueError("Illegal move: kings cannot be captured")
 
+                self.players[opponent_color].pieces.remove(captured_piece)
 
-                    # Standard Capture
-                    elif tile.is_occupied() and tile.piece.color != piece.color:
-                        captured_piece = tile.piece
-                        opponent_color = BLACK if piece.color == WHITE else WHITE
-                        self.players[piece.color].take_piece(captured_piece)
-                        self.players[opponent_color].pieces.remove(captured_piece)
-                        self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id} {captured_piece.color}{captured_piece.name}")
+                if not simulate:
+                    self.players[piece.color].take_piece(captured_piece, simulate=False)
 
-                        tile.place_piece(piece)
-                        piece.location = to_tile_id
+            promotions = {"Q", "R", "B", "N"}
 
-                    # Standard Open Space Move
-                    else:
-                        self.players[piece.color]._log_action(f"{from_tile_id} {to_tile_id}")
-                        tile.place_piece(piece)
-                        piece.location = to_tile_id
+            if promotion is None:
+                if simulate:
+                    promotion = "Q"
+                else:
+                    while promotion not in promotions:
+                        promotion = input(
+                            "Pawn Promotion:\n"
+                            "Type 'Q' for Queen\n"
+                            "Type 'R' for Rook\n"
+                            "Type 'B' for Bishop\n"
+                            "Type 'N' for Knight\n"
+                        ).upper()
+            else:
+                promotion = promotion.upper()
+                if promotion not in promotions:
+                    raise ValueError(f"Unsupported promotion piece: {promotion}")
+
+            if promotion == 'Q':
+                promoted = Queen(piece.color, to_tile_id, 0)
+                promoted.value = 9
+            elif promotion == 'R':
+                promoted = Rook(piece.color, to_tile_id, 0)
+                promoted.value = 5
+            elif promotion == 'B':
+                promoted = Bishop(piece.color, to_tile_id, 0)
+                promoted.value = 3
+            elif promotion == 'N':
+                promoted = Knight(piece.color, to_tile_id, 0)
+                promoted.value = 3
+            else:
+                raise ValueError(f"Unsupported promotion piece: {promotion}")
+
+            promoted.id = piece.id
+
+            # Replace pawn with promoted piece
+            self.players[piece.color].pieces.remove(piece)
+            self.players[piece.color].pieces.append(promoted)
+            target_tile.place_piece(promoted)
+
+            if not simulate:
+                action = PlayerAction(
+                    from_tile_id,
+                    to_tile_id,
+                    piece,
+                    captured=captured_piece,
+                    promotion=promotion
+                )
+                self.players[piece.color]._log_action(action)
+                self.actions.append(action)
+
+            return
+
+        # Check En Passant Move
+        if piece.name == "P":
+            en_passant = self._is_en_passant_move(piece, from_tile_id, to_tile_id)
+            if en_passant is not None:
+                
+                target_tile.place_piece(piece)
+                piece.location = to_tile_id
+
+                passed_pawn_location = ""
+
+                if piece.color == WHITE:
+
+                    col = piece.location[0]
+                    row = int(piece.location[1])
+                    passed_pawn_location = f"{col}{row-1}"
+
+                    passed_tile = self._get_tile(passed_pawn_location)
+                    if passed_tile is None or passed_tile.piece is None or passed_tile.piece.name != "P":
+                        raise ValueError("Invalid en passant state")
+                    captured_piece = passed_tile.piece
+
+                    self.players[piece.color].take_piece(captured_piece, simulate)
+                    self.players[opponent_color].pieces.remove(captured_piece)
+                    passed_tile.remove_piece()
+
+                elif piece.color == BLACK:
+
+                    col = piece.location[0]
+                    row = int(piece.location[1])
+                    passed_pawn_location = f"{col}{row+1}"
+
+                    passed_tile = self._get_tile(passed_pawn_location)
+                    if passed_tile is None or passed_tile.piece is None or passed_tile.piece.name != "P":
+                        raise ValueError("Invalid en passant state")
+                    captured_piece = passed_tile.piece
+
+                    self.players[piece.color].take_piece(captured_piece, simulate)
+                    self.players[opponent_color].pieces.remove(captured_piece)
+                    passed_tile.remove_piece()
+
+                if not simulate:
+                    action = PlayerAction(from_tile_id, to_tile_id, piece, captured=en_passant)
+                    self.players[piece.color]._log_action(action)
+                    self.actions.append(action)
+                return
+
+        # Standard Capture
+        if target_tile._is_occupied() and target_tile.piece.color != piece.color:
+
+            captured_piece = target_tile.piece
+            if captured_piece.name == "K":
+                raise ValueError("Illegal move: kings cannot be captured")
+            
+            if captured_piece is not None and captured_piece.color == piece.color:
+                raise ValueError(f"Illegal move: {piece} cannot move onto own piece at {to_tile_id}")
+
+            opponent_color = BLACK if piece.color == WHITE else WHITE
+            self.players[piece.color].take_piece(captured_piece, simulate)
+            self.players[opponent_color].pieces.remove(captured_piece)
+            target_tile.place_piece(piece)
+            piece.location = to_tile_id
+            if hasattr(piece, "starting_location"):
+                piece.starting_location = None
+
+            # Capture
+            if not simulate:
+                self.players[piece.color]._log_action(
+                    PlayerAction(from_tile_id, to_tile_id, piece, captured=captured_piece)
+                )
+                self.actions.append(PlayerAction(from_tile_id, to_tile_id, piece, captured=captured_piece))
+
+        # Standard Open Space Move
+        else:
+            target_tile.place_piece(piece)
+            piece.location = to_tile_id
+            if hasattr(piece, "starting_location"):
+                piece.starting_location = None
+
+            if not simulate:
+                self.players[piece.color]._log_action(
+                    PlayerAction(from_tile_id, to_tile_id, piece)
+                )
+                self.actions.append(PlayerAction(from_tile_id, to_tile_id, piece))

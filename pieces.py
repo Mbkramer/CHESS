@@ -36,22 +36,32 @@ def _check_tile_occupied(board, tile_id: str) -> bool:
     for row in board:
         for tile in row:
             if tile.id == tile_id:
-                return tile.is_occupied()
+                return tile._is_occupied()
     return False
 
 def _check_tile_occupied_by_opponent(board, tile_id: str, player_color: str) -> bool:
     for row in board:
         for tile in row:
-            if tile.id == tile_id and tile.is_occupied() and tile.piece.color != player_color:
+            if tile.id == tile_id and tile._is_occupied() and tile.piece.color != player_color:
                 return True
     return False
 
 def _check_tile_piece(board , tile_id: str) -> Piece:
     for row in board:
         for tile in row:
-            if tile.id == tile_id and tile.is_occupied():
+            if tile.id == tile_id and tile._is_occupied():
                 return tile.piece
     return None
+
+def _parse_last_action(opp_actions):
+    """Safely parse last action regardless of whether it's a PlayerAction or legacy string."""
+    last = opp_actions[-1]
+    if hasattr(last, 'from_tile'):
+        return last.from_tile, last.to_tile
+    else:
+        parts = last.split(' ')
+        return parts[0], parts[2] if len(parts) >= 3 else parts[1]
+
     
 class Pawn(Piece):
     def __init__(self, color: str, location: str, i: int):
@@ -70,8 +80,7 @@ class Pawn(Piece):
         # generate possible moves for pawn based on color and location
         # Pawns can move 1 or 2 spaces forward on their first move, and 1 space forward on subsequent moves
         # Pawns can capture diagonally, but cannot move forward if the tile is occupied by any piece
-        # TODO Special case for en passant, but will not implement for now
-        
+
         # White Pawn
         if self.color == WHITE:
 
@@ -110,8 +119,9 @@ class Pawn(Piece):
                     target_pawn = _check_tile_piece(board, target_left)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
                                 self.moves.append(take_left)
 
@@ -120,8 +130,9 @@ class Pawn(Piece):
                     target_pawn = _check_tile_piece(board, target_right)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
                                 self.moves.append(take_right)
                 else:
@@ -130,8 +141,9 @@ class Pawn(Piece):
                     target_pawn = _check_tile_piece(board, target_left)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
                                 self.moves.append(take_left)
                             
@@ -139,8 +151,9 @@ class Pawn(Piece):
                     target_pawn = _check_tile_piece(board, target_right)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
                                 self.moves.append(take_right)
 
@@ -180,37 +193,40 @@ class Pawn(Piece):
                     target_pawn = _check_tile_piece(board, target_left)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
                                 self.moves.append(take_left)
 
                 elif ascii_value == 97:
-                    target_right = f"{chr(ascii_value - 1)}{row}"
+                    target_right = f"{chr(ascii_value + 1)}{row}"
                     target_pawn = _check_tile_piece(board, target_right)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
                                 self.moves.append(take_right)
                 else:
-                    
                     target_left = f"{chr(ascii_value - 1)}{row}"
                     target_pawn = _check_tile_piece(board, target_left)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
                                 self.moves.append(take_left)
                             
-                    target_right = f"{chr(ascii_value - 1)}{row}"
+                    target_right = f"{chr(ascii_value + 1)}{row}"
                     target_pawn = _check_tile_piece(board, target_right)
                     if target_pawn != None:
                         if target_pawn.name == "P" and opp_actions:
-                            parts = opp_actions[-1].split(' ')
-                            start, jump = parts[0], parts[-1]
+                            last = opp_actions[-1]
+                            start = last.from_tile
+                            jump  = last.to_tile
                             if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
                                 self.moves.append(take_right)
 
