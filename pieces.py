@@ -15,6 +15,36 @@ PIECES = {
     "K": {"King", 0},
 }
 
+def _lookup_tile(board, tile_id: str):
+    if hasattr(board, "tile_map"):
+        return board.tile_map.get(tile_id)
+
+    for row in board:
+        for tile in row:
+            if tile.id == tile_id:
+                return tile
+    return None
+
+
+def _check_tile_piece(board, tile_id: str):
+    tile = _lookup_tile(board, tile_id)
+    return tile.piece if tile is not None else None
+
+
+def _check_tile_occupied(board, tile_id: str) -> bool:
+    tile = _lookup_tile(board, tile_id)
+    return tile is not None and tile._is_occupied()
+
+
+def _check_tile_occupied_by_opponent(board, tile_id: str, color: str) -> bool:
+    tile = _lookup_tile(board, tile_id)
+    return (
+        tile is not None
+        and tile._is_occupied()
+        and tile.piece is not None
+        and tile.piece.color != color
+    )
+
 class Piece:
     def __init__(self, color: str, name: str, value: int, location: str, id: str):
         self.color = color
@@ -32,26 +62,6 @@ class Piece:
     def get_moves(self):
         return self.moves
         
-def _check_tile_occupied(board, tile_id: str) -> bool:
-    for row in board:
-        for tile in row:
-            if tile.id == tile_id:
-                return tile._is_occupied()
-    return False
-
-def _check_tile_occupied_by_opponent(board, tile_id: str, player_color: str) -> bool:
-    for row in board:
-        for tile in row:
-            if tile.id == tile_id and tile._is_occupied() and tile.piece.color != player_color:
-                return True
-    return False
-
-def _check_tile_piece(board , tile_id: str) -> Piece:
-    for row in board:
-        for tile in row:
-            if tile.id == tile_id and tile._is_occupied():
-                return tile.piece
-    return None
 
 def _parse_last_action(opp_actions):
     """Safely parse last action regardless of whether it's a PlayerAction or legacy string."""

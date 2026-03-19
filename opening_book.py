@@ -141,12 +141,14 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         ),
         style_tags=("development",),
     ),
+
+    # Ruy lopez
     ("e2e4", "e7e5", "g1f3", "b8c6", "f1b5"): OpeningNode(
         name="Ruy Lopez",
         eco="C60-C99",
         continuations=(
-            BookMove("a7a6", 3.5),
-            BookMove("g8f6", 2.0),
+            BookMove("a7a6", 4.0),
+            BookMove("g8f6", 1.5),
         ),
         style_tags=("classical", "solid"),
     ),
@@ -154,8 +156,16 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         name="Ruy Lopez",
         eco="C60-C99",
         continuations=(
-            BookMove("b5a4", 3.0),
-            BookMove("b5c6", 0.7),
+            BookMove("b5a4", 4.0),
+        ),
+        style_tags=("classical",),
+    ),
+    ("e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4"): OpeningNode(
+        name="Ruy Lopez",
+        eco="C60-C99",
+        continuations=(
+            BookMove("g8f6", 3.0),
+            BookMove("d7d6", 1.5),
         ),
         style_tags=("classical",),
     ),
@@ -171,15 +181,23 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         ),
         style_tags=("sharp",),
     ),
-    ("e2e4", "c7c5", "g1f3"): OpeningNode(
+    ("e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4"): OpeningNode(
         name="Open Sicilian",
-        eco="B20-B99",
+        eco="B50-B99",
         continuations=(
-            BookMove("d7d6", 2.5),
-            BookMove("b8c6", 2.0),
-            BookMove("e7e6", 1.5),
+            BookMove("g8f6", 3.0),
+            BookMove("b8c6", 2.5),
+            BookMove("a7a6", 1.2),
         ),
         style_tags=("sharp",),
+    ),
+    ("e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6"): OpeningNode(
+        name="Open Sicilian",
+        eco="B50-B99",
+        continuations=(
+            BookMove("b1c3", 3.5),
+        ),
+        style_tags=("mainline",),
     ),
     ("e2e4", "c7c5", "g1f3", "d7d6"): OpeningNode(
         name="Sicilian Defense",
@@ -267,13 +285,15 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         ),
         style_tags=("classical",),
     ),
+
+    # Queens Gambit
     ("d2d4", "d7d5", "c2c4"): OpeningNode(
         name="Queen's Gambit",
         eco="D06-D69",
         continuations=(
-            BookMove("e7e6", 2.8),  # QGD
-            BookMove("c7c6", 2.0),  # Slav
-            BookMove("d5c4", 0.8),  # QGA
+            BookMove("e7e6", 3.0),  # QGD
+            BookMove("c7c6", 2.2),  # Slav
+            BookMove("d5c4", 0.6),  # QGA
         ),
         style_tags=("classical",),
     ),
@@ -281,8 +301,17 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         name="Queen's Gambit Declined",
         eco="D30-D69",
         continuations=(
-            BookMove("b1c3", 2.0),
-            BookMove("g1f3", 2.0),
+            BookMove("b1c3", 2.5),
+            BookMove("g1f3", 2.5),
+        ),
+        style_tags=("solid",),
+    ),
+    ("d2d4", "d7d5", "c2c4", "c7c6"): OpeningNode(
+        name="Slav Defense",
+        eco="D10-D29",
+        continuations=(
+            BookMove("g1f3", 3.0),
+            BookMove("b1c3", 2.2),
         ),
         style_tags=("solid",),
     ),
@@ -382,6 +411,63 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
             BookMove("e7e6", 1.2),
         ),
         style_tags=("flank",),
+    ),
+
+    # Shallow anti scholars guard
+    ("e2e4", "e7e5", "d1h5"): OpeningNode(
+        name="Wayward Queen Attack",
+        eco="C20",
+        continuations=(
+            BookMove("b8c6", 4.0),
+            BookMove("g8f6", 2.0),
+        ),
+        style_tags=("defensive", "anti-trap"),
+    ),
+    ("e2e4", "e7e5", "d1h5", "b8c6"): OpeningNode(
+        name="Wayward Queen Attack",
+        eco="C20",
+        continuations=(
+            BookMove("f1c4", 2.5),
+            BookMove("g1f3", 2.0),
+        ),
+        style_tags=("trap",),
+    ),
+    ("e2e4", "e7e5", "d1h5", "b8c6", "f1c4"): OpeningNode(
+        name="Anti-Scholar's Defense",
+        eco="C20",
+        continuations=(
+            BookMove("g8f6", 4.0),
+        ),
+        style_tags=("defensive",),
+    ),
+
+    # Ng5 guard
+    ("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6"): OpeningNode(
+        name="Two Knights Defense",
+        eco="C55",
+        continuations=(
+            BookMove("b1c3", 1.5),
+            BookMove("d2d3", 1.2),
+            BookMove("f3g5", 2.5),
+        ),
+        style_tags=("tactical",),
+    ),
+    ("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "f3g5"): OpeningNode(
+        name="Fried Liver / Knight Attack",
+        eco="C57",
+        continuations=(
+            BookMove("d7d5", 5.0),
+        ),
+        style_tags=("defensive", "forced"),
+    ),
+    ("e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "f3g5", "d7d5"): OpeningNode(
+        name="Fried Liver Defense",
+        eco="C57",
+        continuations=(
+            BookMove("e4d5", 3.0),
+            BookMove("c4d5", 2.0),
+        ),
+        style_tags=("forced",),
     ),
 }
 

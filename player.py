@@ -66,10 +66,10 @@ class Player:
         self.actions.append(action)
 
 
-    def update_moves(self, board, opp_actions) -> None:
+    def update_moves(self, chess_board, opp_actions) -> None:
         # Always regenerate raw moves first
         for piece in self.pieces:
-            piece.set_moves(board, opp_actions)
+            piece.set_moves(chess_board, opp_actions)
 
         # If in check, possible_moves must be a list of (from_location, to_location) pairs
         if self.checked:
@@ -88,13 +88,13 @@ class Player:
                 self.possible_moves.append((piece.location, move))
 
 
-    def _show_moves(self, board) -> None:
+    def _show_moves(self, chess_board) -> None:
 
         for piece in self.pieces:
             if len(piece.moves) > 0:
                 moves_str = ""
                 for move in piece.moves:
-                    if move == board.black_king_location or move == board.white_king_location:
+                    if move == chess_board.black_king_location or move == chess_board.white_king_location:
                         continue
                     moves_str += f"{move} "
                 print(f"{COLOR[self.color]} {piece.name} at {piece.location} can move to: {moves_str}")

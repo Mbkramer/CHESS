@@ -60,6 +60,7 @@ class ChessBoard:
         self.actions = []
 
         self._init_board_tiles()
+        self.tile_map = {tile.id: tile for row in self.board for tile in row}
 
         self.players = {
             WHITE: Player(WHITE),
@@ -71,8 +72,8 @@ class ChessBoard:
 
         self._update_tiles()
 
-        self.players[WHITE].update_moves(self.board, [])
-        self.players[BLACK].update_moves(self.board, [])
+        self.players[WHITE].update_moves(self, [])
+        self.players[BLACK].update_moves(self, [])
 
 
     # Initialize board tiles with alternating colors and unique IDs
@@ -109,26 +110,25 @@ class ChessBoard:
 
     # Display current board state with ascii art 
     def _draw_ascii_board(self):
-        print(f"\n          WHITE          POINTS: {self.players[WHITE].points}          PIECES TAKEN: {self.players[WHITE].taken_pieces_str}            ")
         print("            a         b         c         d         e         f         g         h         \n")
         for row in self.board:
             rank = row[0].id[1]
             self._print_side_by_side(*[tile.ascii for tile in row], index=rank)
-        print(f"\n          BLACK          POINTS: {self.players[BLACK].points}          PIECES TAKEN: {self.players[BLACK].taken_pieces_str}            ")
 
     
     """
     Assess Board and player moves
 
     """
+    def _get_king_piece(self, color):
+        for piece in self.players[color].pieces:
+            if piece.name == "K":
+                return piece
+        return None
 
     # Get tile
     def _get_tile(self, tile_id: str) -> Tile:
-        for row in self.board:
-            for tile in row:
-                if tile.id == tile_id:
-                    return tile
-        return None
+        return self.tile_map.get(tile_id)
 
     # Check if board tile is occupied by a piece
     def _check_tile_occupied(self, tile_id: str) -> bool:
@@ -142,7 +142,7 @@ class ChessBoard:
         # 1. Generate raw moves / attack maps
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
-            self.players[color].update_moves(self.board, self.players[opp].actions)
+            self.players[color].update_moves(self, self.players[opp].actions)
 
         # 2. Determine check from raw attack maps
         checked_status = {}
@@ -186,6 +186,33 @@ class ChessBoard:
                     
                 tile.place_piece(piece)
 
+    def _refresh_search_state_for_turn(self, turn: str) -> None:
+        opp = BLACK if turn == WHITE else WHITE
+
+        self._sync_board()
+
+        # Raw move generation for both sides is still needed for attack maps/check logic
+        self.players[WHITE].update_moves(self, self.players[BLACK].actions)
+        self.players[BLACK].update_moves(self, self.players[WHITE].actions)
+
+        # Set checked flags from raw attack maps
+        self.players[WHITE].checked = self._test_check(WHITE)
+        self.players[BLACK].checked = self._test_check(BLACK)
+
+        # Only legalize the side to move
+        self._cut_illegal_moves(turn)
+
+        # Rebuild only side-to-move legal move list
+        self.players[turn].possible_moves = []
+        for piece in self.players[turn].pieces:
+            for move in piece.moves:
+                self.players[turn].possible_moves.append((piece.location, move))
+
+        self.players[turn].mated = (
+            self.players[turn].checked and
+            len(self.players[turn].possible_moves) == 0
+        )
+
     # Remove any move that leaves own king in check.
     def _cut_illegal_moves(self, color) -> None:
         for piece in self.players[color].pieces:
@@ -211,19 +238,16 @@ class ChessBoard:
 
     def _test_check(self, color) -> bool:
         opp_color = BLACK if color == WHITE else WHITE
-        king = None
-
-        for piece in self.players[color].pieces:
-            if piece.name == "K":
-                king = piece
-                break
+        king_location = self.white_king_location if color == WHITE else self.black_king_location
+        king = self._get_king_piece(color)
 
         if king is None:
             raise ValueError(f"No king found for {color}")
 
         king.check = False
+
         for opp_piece in self.players[opp_color].pieces:
-            if king.location in opp_piece.moves:
+            if king_location in opp_piece.moves:
                 king.check = True
                 return True
 
@@ -319,8 +343,8 @@ class ChessBoard:
             self._move_piece(piece, move, simulate=True)
             self._sync_board()
 
-            self.players[color].update_moves(self.board, self.players[opp].actions)
-            self.players[opp].update_moves(self.board, self.players[color].actions)
+            self.players[color].update_moves(self, self.players[opp].actions)
+            self.players[opp].update_moves(self, self.players[color].actions)
 
             return not self._test_check(color)
         finally:
@@ -335,8 +359,8 @@ class ChessBoard:
         self._move_piece(piece, move, simulate=True)
         self._sync_board()
 
-        self.players[WHITE].update_moves(self.board, self.players[BLACK].actions)
-        self.players[BLACK].update_moves(self.board, self.players[WHITE].actions)
+        self.players[WHITE].update_moves(self, self.players[BLACK].actions)
+        self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
@@ -513,6 +537,8 @@ class ChessBoard:
                 if simulate:
                     promotion = "Q"
                 else:
+                    promotion = "Q"
+                    """
                     while promotion not in promotions:
                         promotion = input(
                             "Pawn Promotion:\n"
@@ -521,6 +547,7 @@ class ChessBoard:
                             "Type 'B' for Bishop\n"
                             "Type 'N' for Knight\n"
                         ).upper()
+                    """
             else:
                 promotion = promotion.upper()
                 if promotion not in promotions:
@@ -616,6 +643,12 @@ class ChessBoard:
             
             if captured_piece is not None and captured_piece.color == piece.color:
                 raise ValueError(f"Illegal move: {piece} cannot move onto own piece at {to_tile_id}")
+            
+            if piece.name == "K":
+                if piece.color == WHITE:
+                    self.white_king_location = to_tile_id
+                elif piece.color == BLACK:
+                    self.black_king_location = to_tile_id
 
             opponent_color = BLACK if piece.color == WHITE else WHITE
             self.players[piece.color].take_piece(captured_piece, simulate)
@@ -634,6 +667,12 @@ class ChessBoard:
 
         # Standard Open Space Move
         else:
+            if piece.name == "K":
+                if piece.color == WHITE:
+                    self.white_king_location = to_tile_id
+                elif piece.color == BLACK:
+                    self.black_king_location = to_tile_id
+
             target_tile.place_piece(piece)
             piece.location = to_tile_id
             if hasattr(piece, "starting_location"):
