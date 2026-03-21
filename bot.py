@@ -8,12 +8,13 @@ from opening_book import choose_book_move, book_move_bonus
 # for now use generic path
 from model import load_model
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/best_pgn_v2.pt")
+MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/best_pgn_2000_2400_v2.pt")
 
 model = None
 if os.path.exists(MODEL_PATH):
     try:
         model = load_model(MODEL_PATH)
+        model.eval()
         print(f"Bot model loaded from {MODEL_PATH}")
     except Exception as e:
         print(f"Warning: failed to load bot model from {MODEL_PATH}: {e}")
@@ -27,6 +28,111 @@ COLOR = {"W": "White", "B": "Black"}
 PIECE_VALUES = {'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 0}
 
 MAX_BOOK_PLIES = 12
+
+EARLY = "EARLY"
+MIDDLE = "MIDDLE"
+LATE = "LATE"
+
+def fmt_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+
+    parts = []
+    if h > 0:
+        parts.append(f"{h}h")
+    if m > 0:
+        parts.append(f"{m}m")
+    parts.append(f"{s:.1f}s")
+
+    return " ".join(parts)
+
+def game_phase(chess_board):
+
+    total_pieces = 0
+    total_not_pawn = 0
+
+    for color in (WHITE, BLACK):
+        for piece in chess_board.players[color].pieces:
+            if piece.name == "K":
+                continue
+            total_pieces += 1
+            if piece.name != "P":
+                total_not_pawn += 1
+
+    # --- LATE GAME ---
+    if total_pieces <= 12 or total_not_pawn <= 4:
+        return LATE
+
+    # --- MIDDLE GAME ---
+    if total_pieces <= 26 or total_not_pawn <= 10:
+        return MIDDLE
+
+    # --- OTHERWISE ---
+    return EARLY
+
+import chess
+import chess.pgn
+from datetime import datetime
+
+def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
+    """
+    Converts your engine's action log into a valid PGN file
+    and saves it under data/bot_games/<model_name>/.
+
+    result:
+        "1-0", "0-1", "1/2-1/2", or "*"
+    """
+
+    board = chess.Board()
+    game = chess.pgn.Game()
+
+    # --- Headers ---
+    model_name = os.path.basename(model_path).replace(".pt", "")
+
+    game.headers["Event"] = "Bot Self-Play"
+    game.headers["Site"] = "Local"
+    game.headers["Date"] = datetime.now().strftime("%Y.%m.%d")
+    game.headers["White"] = model_name
+    game.headers["Black"] = model_name
+    game.headers["Result"] = result
+
+    node = game
+
+    # --- Replay moves ---
+    for action in chess_board.actions:
+
+        move_uci = action.from_tile + action.to_tile
+
+        # Handle promotion
+        if action.promotion:
+            move_uci += action.promotion.lower()
+
+        move = chess.Move.from_uci(move_uci)
+
+        if move not in board.legal_moves:
+            raise ValueError(f"Illegal move during PGN export: {move_uci}")
+
+        board.push(move)
+        node = node.add_variation(move)
+
+    # --- Final result ---
+    game.headers["Result"] = result
+
+    # --- Build output path ---
+    save_dir = os.path.join("data", "bot_games", model_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"game_{timestamp}.pgn"
+    filepath = os.path.join(save_dir, filename)
+
+    # --- Write PGN ---
+    with open(filepath, "w", encoding="utf-8") as f:
+        exporter = chess.pgn.FileExporter(f)
+        game.accept(exporter)
+
+    return filepath
 
 # ── Debug print tree ───────────────────────────────────────────────────────
 
@@ -127,8 +233,8 @@ KING_TABLE = [
     -0.3, -0.4, -0.4, -0.5, -0.5, -0.4, -0.4, -0.3,
     -0.2, -0.3, -0.3, -0.4, -0.4, -0.3, -0.3, -0.2,
     -0.1, -0.2, -0.2, -0.2, -0.2, -0.2, -0.2, -0.1,
-     0.2,  0.2,  0.0,  0.0,  0.0,  0.0,  0.2,  0.2,
-     0.2,  0.3,  0.1,  0.0,  0.0,  0.1,  0.3,  0.2,
+    0.15, 0.20, 0.05, -0.05, -0.05, 0.05, 0.20, 0.15,
+    0.20, 0.35, 0.15, -0.10, -0.10, 0.15, 0.35, 0.20,
 ]
 
 PIECE_TABLES = {
@@ -243,6 +349,7 @@ def _mobility(chess_board) -> float:
 def _king_safety(chess_board, color) -> float:
     """
     Dynamic king safety based on:
+      - Castled Structure Bonus (+)
       - Pawn shield in front of the king (+)
       - Open/semi-open files near the king (-)
       - Enemy piece proximity to the king (-)
@@ -257,6 +364,20 @@ def _king_safety(chess_board, color) -> float:
     king_row     = int(king.location[1])
 
     score = 0.0
+
+    # ── Castled Structure Bonus───────────────────────────────────────────────────────
+
+    # Board has a castle structure
+    row = 1 if color == WHITE else 8
+
+    piece = chess_board._get_tile(f"d{row}").piece
+    if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"c{row}":
+        score += .75
+
+    piece = chess_board._get_tile(f"f{row}").piece
+    if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"g{row}":
+        score += .75
+
 
     # ── Pawn shield ───────────────────────────────────────────────────────
     # The two ranks directly in front of the king should have friendly pawns
@@ -328,26 +449,34 @@ def _rook_on_open_file(chess_board, color) -> float:
             score += 0.1        # semi-open (no friendly pawn)
     return score
 
+def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
+    moves = []
+    for piece in chess_board.players[turn].pieces:
+        for move in piece.moves:
+            target_tile = chess_board._get_tile(move)
+            if target_tile and target_tile.piece and target_tile.piece.name == "K":
+                continue
+            order_score = move_order_score(
+                chess_board, piece, move, color=turn, repertoire_name=repertoire_name
+            )
+            moves.append((piece, move, order_score))
+    return moves
 
-def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int):
-    legal_moves = chess_board.players[turn].possible_moves
-    in_check = chess_board.players[turn].checked
 
-    if len(legal_moves) == 0:
-        if in_check:
-            return -MATE_SCORE + depth if turn == root_color else MATE_SCORE - depth
-        return 0.0
-
-    return None
+# --- Search depth handling ----------------------------------------------
 
 def _should_extend(piece, move, chess_board):
     target_tile = chess_board._get_tile(move)
-    is_capture = target_tile and target_tile.piece and target_tile.piece.color != piece.color
 
-    if is_capture:
-        victim = target_tile.piece.name
+    if not (target_tile and target_tile.piece and target_tile.piece.color != piece.color):
+        return False
 
-    return is_capture and PIECE_VALUES[victim] >= PIECE_VALUES[piece.name]
+    victim = target_tile.piece.name
+    attacker_val = PIECE_VALUES[piece.name]
+    victim_val = PIECE_VALUES[victim]
+
+    # only extend clearly forcing captures
+    return victim_val >= attacker_val or victim == 'Q'
 
 def _adjusted_depth(base_depth, num_moves, total_pieces):
     d = base_depth
@@ -359,11 +488,19 @@ def _adjusted_depth(base_depth, num_moves, total_pieces):
 
     return min(d, base_depth + 1)
 
-def _opening_candidate_cap(board, default_cap: int) -> int:
-    history_len = len(getattr(board, "actions", []))
-    if history_len <= 8:
-        return max(default_cap, 16)  # do not strangle development choices
-    return default_cap
+
+# --- Evaluatations -----------------------------------------------------------
+
+def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, repertoire_name="balanced"):
+    legal_moves = _search_legal_moves(chess_board, turn, repertoire_name=repertoire_name)
+    in_check = chess_board.players[turn].checked
+
+    if len(legal_moves) == 0:
+        if in_check:
+            return -MATE_SCORE + depth if turn == root_color else MATE_SCORE - depth
+        return 0.0
+
+    return None
 
 def evaluate(chess_board, color) -> float:
 
@@ -394,7 +531,26 @@ def evaluate(chess_board, color) -> float:
     classical += _rook_on_open_file(chess_board, WHITE)
     classical -= _rook_on_open_file(chess_board, BLACK)
 
-    score = 0.4 * model_score + 0.6 * classical
+    # Phase Signals
+
+    phase = game_phase(chess_board)
+
+
+    model_scaled = model_score * 5
+
+    # Clamp model influence (important)
+    model_scaled = max(min(model_scaled, 3), -3)
+
+    # Phase weights
+    model_weight = 0.10
+    if phase == "MIDDLE":
+        model_weight = 0.20
+    elif phase == "LATE":
+        model_weight = 0.25  
+
+    classical_weight = 1 - model_weight
+
+    score = model_weight * model_scaled + classical_weight * classical
 
     return score if color == WHITE else -score
 
@@ -407,6 +563,63 @@ def evaluate(chess_board, color) -> float:
 def _opening_phase(board) -> bool:
     return len(getattr(board, "actions", [])) <= 10  # first 5 moves each side
 
+def _is_castle_move(piece, move: str) -> bool:
+    return (
+        piece.name == 'K' and (
+            (piece.color == WHITE and piece.location == 'e1' and move in ('g1', 'c1')) or
+            (piece.color == BLACK and piece.location == 'e8' and move in ('g8', 'c8'))
+        )
+    )
+
+def _could_plausibly_give_check(board, piece, move) -> bool:
+    opp = BLACK if piece.color == WHITE else WHITE
+    king_sq = board.black_king_location if opp == BLACK else board.white_king_location
+
+    mc = ord(move[0])
+    mr = int(move[1])
+    kc = ord(king_sq[0])
+    kr = int(king_sq[1])
+
+    dc = abs(mc - kc)
+    dr = abs(mr - kr)
+
+    if piece.name == "N":
+        return (dc, dr) in ((1, 2), (2, 1))
+    if piece.name == "K":
+        return dc <= 1 and dr <= 1
+    if piece.name == "P":
+        if piece.color == WHITE:
+            return dr == 1 and dc == 1 and mr > kr
+        return dr == 1 and dc == 1 and mr < kr
+    if piece.name in ("B", "R", "Q"):
+        return dc == 0 or dr == 0 or dc == dr
+
+    return False
+
+def _move_gives_check(board, piece, move) -> bool:
+    mover = piece.color
+    opp = BLACK if mover == WHITE else WHITE
+
+    target_tile = board._get_tile(move)
+    if target_tile and target_tile.piece and target_tile.piece.name == "K":
+        return False
+
+    snap = board._snapshot_state()
+
+    try:
+        board._move_piece(piece, move, simulate=True)
+        board._sync_board()
+
+        # Raw move generation is enough for attack maps
+        board.players[mover].update_moves(board, board.players[opp].actions)
+        board.players[opp].update_moves(board, board.players[mover].actions)
+
+        return board._test_check(opp)
+
+    except Exception:
+        return False
+    finally:
+        board._restore_state(snap)
 
 def _early_opening_safety_bonus(board, piece, move) -> float:
     """
@@ -444,6 +657,45 @@ def _early_opening_safety_bonus(board, piece, move) -> float:
 
     return score
 
+def _is_quiet_backtrack(board, piece, move: str) -> bool:
+    """
+    Penalize a side moving the same piece straight back to the square
+    it came from on its previous turn.
+
+    Example:
+      White: Bc3 -> d2
+      ...
+      White: Bd2 -> c3   <-- penalize
+    """
+    actions = getattr(board, "actions", [])
+    if len(actions) < 2:
+        return False
+
+    target_tile = board._get_tile(move)
+    is_capture = (
+        target_tile is not None and
+        target_tile.piece is not None and
+        target_tile.piece.color != piece.color
+    )
+    is_promotion = (
+        piece.name == 'P' and
+        ((piece.color == WHITE and move[1] == '8') or
+         (piece.color == BLACK and move[1] == '1'))
+    )
+    is_castle = _is_castle_move(piece, move)
+
+    # only penalize quiet shuffles
+    if is_capture or is_promotion or is_castle:
+        return False
+
+    # same side's previous move is 2 plies ago
+    prev_own_action = actions[-2]
+
+    return (
+        getattr(prev_own_action, "piece_id", None) == piece.id and
+        getattr(prev_own_action, "to_tile", None) == piece.location and
+        getattr(prev_own_action, "from_tile", None) == move
+    )
 
 def move_order_score(board, piece, move, color=None, repertoire_name="balanced"):
     score = 0.0
@@ -456,7 +708,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         victim_val = PIECE_VALUES[victim.name]
 
         # Stronger separation than your current formula
-        score += 10.0 * victim_val - attacker_val
+        score += 2 * victim_val - attacker_val
 
         # Prefer clearly favorable captures even more
         if victim_val > attacker_val:
@@ -469,7 +721,20 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
                               (piece.color == BLACK and move[1] == '1')):
         score += 20.0
 
-    # 3. Center / development only early
+    # 3. Checks 
+    if _could_plausibly_give_check(board, piece, move):
+        if _move_gives_check(board, piece, move):
+            score += 8.0
+
+    # 4. If castle available prioritize
+    if piece.color == WHITE and piece.name == "K":
+        if piece.location == piece.starting_location and (move == "c1" or move == "g1"):
+            score += 10.0
+    elif piece.color == BLACK and piece.name == "K":
+        if piece.location == piece.starting_location and (move == "c8" or move == "g8"):
+            score += 10.0
+
+    # 5. Center / development only early
     history_len = len(getattr(board, "actions", []))
     if history_len <= 12:
         center_bonus = {
@@ -481,13 +746,17 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         score += center_bonus.get(move, 0.0)
         score += _early_opening_safety_bonus(board, piece, move)
 
-    # 4. Book bonus only when relevant
+    # 6. Book bonus only when relevant
     if color is not None and history_len <= 16:
         score += book_move_bonus(
             board, piece, move,
             color=color,
             repertoire_name=repertoire_name
         )
+
+    # 7. Quiet backtrack penalty
+    if _is_quiet_backtrack(board, piece, move):
+        score -= 0.30
 
     return score
 
@@ -498,7 +767,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             ply: int = 0,
             debug: int = 0,
             debug_max_children: int | None = None,
-            deadline=None) -> float:
+            deadline: float = None) -> float:
     """
     debug levels:
       0 = off
@@ -545,9 +814,32 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             all_moves.append((piece, move, order_score))
 
     all_moves.sort(key=lambda pm: pm[2], reverse=True)
+    history_len = len(getattr(chess_board, "actions", []))
+    total_pieces = len(chess_board.players[WHITE].pieces) + len(chess_board.players[BLACK].pieces)
 
-    if depth >= 2:
-        all_moves = all_moves[:_opening_candidate_cap(chess_board, 8)]
+    candidate_cap = len(all_moves)
+
+    # widen in tactical / endgame spots
+    if chess_board.players[turn].checked:
+        candidate_cap = min(candidate_cap, 20)
+
+    # depth-based cap: deeper = narrower, shallower = wider
+    if depth >= 4:
+        candidate_cap = min(candidate_cap, 8 if history_len > 10 else 10)
+    elif depth == 3:
+        candidate_cap = min(candidate_cap, 10 if history_len > 10 else 12)
+    elif depth == 2:
+        candidate_cap = min(candidate_cap, 14)
+    else:
+        candidate_cap = min(candidate_cap, 18)
+
+    # widen in endgames
+    if total_pieces <= 10:
+        candidate_cap = max(candidate_cap, min(len(all_moves), 18))
+
+    if len(all_moves) > candidate_cap:
+        all_moves = all_moves[:candidate_cap]
+
 
     # No legal moves — stalemate or checkmate
     if not all_moves:
@@ -571,9 +863,6 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
     if debug >= 2 and debug_max_children is not None:
         shown_moves = all_moves[:debug_max_children]
 
-    if len(shown_moves) > 20:
-        shown_moves = shown_moves[:12]
-
     best = float('-inf') if maximizing else float('inf')
 
     for idx, (piece, move, order_score) in enumerate(shown_moves):
@@ -594,7 +883,8 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             is_forcing = _should_extend(piece, move, chess_board)
 
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(next_turn)
+            chess_board._refresh_search_state_for_turn(WHITE)
+            chess_board._refresh_search_state_for_turn(BLACK)
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
@@ -615,7 +905,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 ply=ply + 2,
                 debug=debug,
                 debug_max_children=debug_max_children,
-                deadline=None
+                deadline=deadline
             )
 
             if debug >= 2:
@@ -715,7 +1005,10 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
     search_depth = _adjusted_depth(depth, num_moves, total_pieces)
 
     candidate_moves.sort(key=lambda pm: pm[2], reverse=True)
-    candidate_moves = candidate_moves[:10]
+
+    # Softer root cap
+    if len(candidate_moves) > 24 and total_pieces > 12:
+        candidate_moves = candidate_moves[:16]
 
     if debug >= 1:
         _debug_log(
@@ -742,16 +1035,18 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
         try:
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(next_turn)
+            chess_board._refresh_search_state_for_turn(WHITE)
+            chess_board._refresh_search_state_for_turn(BLACK)
 
             # Return mated opponent move immediately
-            if len(chess_board.players[next_turn].possible_moves) == 0 and chess_board.players[next_turn].checked:
+            opp_moves = _search_legal_moves(chess_board, next_turn, repertoire_name=repertoire_name)
+            if len(opp_moves) == 0 and chess_board.players[next_turn].checked:
                 if debug >= 1:
                     _debug_log(debug, 2 if debug >= 2 else 1, "immediate mate found")
                 return (from_sq, move)
             
             if fallback is None:
-                fallback = (piece.location, move)
+                fallback = (from_sq, move)
 
             if deadline is not None and time.time() >= deadline:
                 return chosen or fallback
@@ -803,3 +1098,112 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         )
 
     return chosen
+
+
+"""
+Run x number of self play games and print outcomes
+"""
+
+def main():
+    from chess_board import ChessBoard
+    import time
+
+    print("Enter the following infromation exactly in place:\n")
+    info = input("num_games depth debug \n")
+    games_str, depth_str, debug_str = info.split()
+
+    try:
+        games = int(games_str)
+        depth = int(depth_str)
+        debug = int(debug_str)
+
+        avg_time = 0
+        total_time = 0
+        avg_num_moves = 0
+        total_castles = 0
+        total_promotions = 0
+        white_wins = 0
+        black_wins = 0
+
+        start_time = time.time()
+
+        for game in range(games):
+            print(f"GAME {game}: ")
+            chess_board = ChessBoard()
+            running = True
+            turn = WHITE
+            game_start_time = time.time()
+            game_end_time = None
+
+            phase = "EARLY"
+            print(f"GAME PHASE: {phase}")
+
+            while running:
+
+                if len(chess_board.players[turn].possible_moves) == 0:
+                    if chess_board.players[turn].checked:
+                        running = False
+                        game_end_time = time.time()
+                        if turn != WHITE:
+                            white_win = 1
+                            black_win = 0
+                            white_wins+=1
+                        elif turn == WHITE:
+                            white_win = 0
+                            black_win = 1
+                            black_wins+=1
+                    else:
+                        running = False
+                        game_end_time = time.time()
+                        white_win = 1/2
+                        black_win = 1/2
+
+                else:
+                    move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=120)
+                    if move:
+                        from_sq, to_sq = move
+                        piece = next(p for p in chess_board.players[turn].pieces 
+                                    if p.location == from_sq)
+                        chess_board._move_piece(piece, to_sq)
+                        chess_board._update_tiles()
+                        print(chess_board.actions[-1])
+                        if chess_board.actions[-1].captured != None:
+                            current_phase = game_phase(chess_board)
+                            if phase != current_phase:
+                                phase = current_phase
+                                print(f"GAME PHASE: {phase}")
+
+                turn = BLACK if turn == WHITE else WHITE
+
+            game_time = fmt_time(game_end_time - game_start_time)
+            num_moves = len(chess_board.actions)
+            num_castles = 0
+            for action in chess_board.actions:
+                if action.castle != None:
+                    num_castles+=1
+            total_castles+=num_castles
+            num_promo = 0
+            for action in chess_board.actions:
+                if action.promotion != None:
+                    num_promo+=1
+            total_promotions+=num_promo
+
+            print(f"GAME {game} COMPLETE, {COLOR[turn]} WINS: TIME: {game_time}  NUMBER OF MOVES: {num_moves}  NUMBER OF CASTLES: {num_castles}  NUMBER OF PROMOTIONS: {num_promo}")
+
+            # Load PGN
+            path = export_game_to_pgn(chess_board, model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
+            print(f"Saved PGN to: {path}")
+
+
+        end_time = time.time()
+        total_time = fmt_time(end_time - start_time)
+        avg_time = fmt_time((end_time - start_time)/games)
+        avg_num_moves = avg_num_moves/games
+
+        print(f"{games} GAMES EVAL COMPLETE, {COLOR[turn]}  WINS:  WHITE: {white_wins}  BLACK{black_wins}  TIME: {total_time}  AVG GAME TIME {avg_time}  NUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  NUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
+    
+    except Exception as e:
+        print(f"NOT INT FAILE TO GENERATE GAMES:\n{e}")
+
+if __name__ == '__main__':
+    main()

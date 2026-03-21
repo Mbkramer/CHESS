@@ -75,10 +75,7 @@ def _parse_last_action(opp_actions):
     
 class Pawn(Piece):
     def __init__(self, color: str, location: str, i: int):
-        if i > 0:
-            id = f'{color}P{i}'
-        else:
-            id = f''
+        id = f'{color}P{i+1}'
         self.starting_location = location
 
         super().__init__(color, "P", 1, location, id)
@@ -254,10 +251,7 @@ class Pawn(Piece):
 
 class Knight(Piece):
     def __init__(self, color: str, location: str, i: int):
-        if i > 0:
-            id = f'{color}N{i}'
-        else:
-            id = f''
+        id = f'{color}N{i+1}'
         super().__init__(color, "N", 3, location, id)
 
     def set_moves(self, board, opp_actions):
@@ -313,10 +307,7 @@ class Knight(Piece):
 
 class Bishop(Piece):
     def __init__(self, color: str, location: str, i: int):
-        if i > 0:
-            id = f'{color}B{i}'
-        else:
-            id = f''        
+        id = f'{color}B{i+1}'      
         super().__init__(color, "B", 3, location, id)
 
     def set_moves(self, board, opp_actions):
@@ -393,10 +384,7 @@ class Bishop(Piece):
 
 class Rook(Piece):
     def __init__(self, color: str, location: str, i: int):
-        if i > 0:
-            id = f'{color}R{i}'
-        else:
-            id = f''
+        id = f'{color}R{i+1}'
         super().__init__(color, "R", 5, location, id)
 
     def set_moves(self, board, opp_actions):
@@ -585,10 +573,7 @@ class Queen(Piece):
 class King(Piece):
 
     def __init__(self, color: str, location: str, i: int):
-        if i > 0:
-            id = f'{color}K{i}'
-        else:
-            id = f'{color}K'
+        id = f'{color}K'
         self.starting_location = location
         self.check = False
         self.castle = ""

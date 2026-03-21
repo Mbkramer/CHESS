@@ -12,6 +12,7 @@ WHITE = 'W'
 BLACK = 'B'
 
 COLORS = [WHITE, BLACK]
+PHASES = ("EARLY", "MIDDLE", "LATE")
 
 class Tile:
     def __init__(self, column: str, color: str, row: str):
@@ -69,6 +70,7 @@ class ChessBoard:
 
         self.black_king_location = "e8"
         self.white_king_location = "e1"
+        self.phase = "EARLY"
 
         self._update_tiles()
 
@@ -372,6 +374,9 @@ class ChessBoard:
     
     """
 
+    def _get_game_phase(self) -> str:
+        return self.phase
+
     def _is_castle_move(self, piece, from_tile_id, to_tile_id):
         if piece.name != "K":
             return None
@@ -651,6 +656,7 @@ class ChessBoard:
                     self.black_king_location = to_tile_id
 
             opponent_color = BLACK if piece.color == WHITE else WHITE
+
             self.players[piece.color].take_piece(captured_piece, simulate)
             self.players[opponent_color].pieces.remove(captured_piece)
             target_tile.place_piece(piece)
@@ -660,10 +666,9 @@ class ChessBoard:
 
             # Capture
             if not simulate:
-                self.players[piece.color]._log_action(
-                    PlayerAction(from_tile_id, to_tile_id, piece, captured=captured_piece)
-                )
-                self.actions.append(PlayerAction(from_tile_id, to_tile_id, piece, captured=captured_piece))
+                action = PlayerAction(from_tile_id, to_tile_id, piece, captured=captured_piece)
+                self.players[piece.color]._log_action(action)
+                self.actions.append(action)
 
         # Standard Open Space Move
         else:
@@ -679,7 +684,6 @@ class ChessBoard:
                 piece.starting_location = None
 
             if not simulate:
-                self.players[piece.color]._log_action(
-                    PlayerAction(from_tile_id, to_tile_id, piece)
-                )
-                self.actions.append(PlayerAction(from_tile_id, to_tile_id, piece))
+                action = PlayerAction(from_tile_id, to_tile_id, piece)
+                self.players[piece.color]._log_action(action)
+                self.actions.append(action)

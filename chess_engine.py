@@ -4,6 +4,7 @@ import random
 from chess_board import ChessBoard
 from bot import best_move
 from opening_book import REPERTOIRES, BALANCED, SOLID, AGRESSIVE, TACTICAL
+import copy
 
 ROWS = ["1", "2", "3", "4", "5", "6", "7", "8"]
 COLUMNS = ["a", "b", "c", "d", "e", "f", "g", "h"]
@@ -162,8 +163,14 @@ def game_loop(chess_board: ChessBoard, game_input):
 
                 if len(game_input) == 3:
                     print("\033c", end="", flush=True)
-                elif len(game_input) == 4 and (game_input[3] != 'debug' or game_input[3] != 'DEBUG'):
-                    print("\033c", end="", flush=True)
+                elif len(game_input) == 4:
+                    if game_input[3] == 'debug':
+                        pass
+                    elif game_input[3] == 'DEBUG':
+                        pass
+                    else:
+                        print("\033c", end="", flush=True)
+
 
                 if game_input[2] == None:
                     running = player_menu(chess_board, last_move_times, turn)
@@ -178,7 +185,6 @@ def game_loop(chess_board: ChessBoard, game_input):
                     last_move_times[WHITE] = end_time - start_time
                 elif turn == BLACK:
                     last_move_times[BLACK] = end_time - start_time
-
                 if turn == WHITE and game_input[2] != None:
                     shot_clocks[WHITE] -= last_move_times[WHITE]
                 elif turn == BLACK and game_input[2] != None:
@@ -252,6 +258,153 @@ def game_loop(chess_board: ChessBoard, game_input):
             turn = BLACK if turn == WHITE else WHITE
 
 
+    # Player Vs Bot Game
+    elif game_input[0] == 'aid':
+
+        while running:
+
+            if len(game_input) == 3:
+                print("\033c", end="", flush=True)
+            elif len(game_input) == 4:
+                if game_input[3] == 'debug':
+                    pass
+                elif game_input[3] == 'DEBUG':
+                    pass
+                else:
+                    print("\033c", end="", flush=True)
+            else:
+                print("\033c", end="", flush=True)
+
+            # If player turn get bot recomendation
+            if game_input[1] == turn:
+
+                if len(chess_board.players[turn].possible_moves) == 0:
+                    print(f"MATED: {COLORS[turn]} has been mated...\n")
+                    print("GAME OVER")
+                    running = False
+                    return
+                
+                print("Waiting on bot recomendation..\n")
+                bot_board = copy.deepcopy(chess_board)
+
+                # Cap bot decions making time
+                move_budget = 120 # Generouse 2 minutes
+                depth = 3
+
+                # Under a shot clock
+                if game_input[2] != None:
+                    move_budget = min(60.0, max(5.0, shot_clocks[turn] / 10))
+                    if shot_clocks[turn] < .60 * game_input[2]:
+                        move_budget = min(move_budget, max(3.0, shot_clocks[turn] / 8))
+                    if shot_clocks[turn] < .2 * game_input[2]:
+                        depth = 2
+
+                start_time = time.time()
+
+                # Bot recomendation
+                if len(game_input) == 4: # Debug mode
+                    if game_input[3] == "debug":
+                        move = best_move(bot_board, turn, depth=depth, debug=1, time_budget=move_budget)
+                    elif game_input[3] == "DEBUG":
+                        move = best_move(bot_board, turn, depth=depth, debug=2, debug_max_children=4, time_budget=move_budget)
+                    else:
+                        move = best_move(bot_board, turn, depth=depth, time_budget=move_budget)
+                else:  # not debug normal mode
+                    move = best_move(bot_board, turn, depth=depth, time_budget=move_budget)
+
+                if move:
+                    from_sq, to_sq = move
+                    print(f"Bot recomendation: {from_sq} {to_sq}")
+
+                # log move:
+                waiting = True
+                while waiting:
+                    user_input = input("Type: 'from_tile to_tile' (without quotes) and press Enter to log your played move. example: e2 e4\n")
+                    if user_input.lower() == "exit":
+                        return False
+
+                    try:
+                        from_tile, to_tile = user_input.split()
+                    except Exception as e:
+                        print(e)
+                        continue
+
+                    try:
+                        piece = next(p for p in chess_board.players[turn].pieces 
+                                    if p.location == from_tile)
+                        chess_board._move_piece(piece, to_tile)
+                        chess_board._update_tiles()
+                        print(chess_board.actions[-1])
+                        waiting = False
+                    except Exception as e:
+                        print("Move failed.. ")
+                        print(e)
+                
+                end_time = time.time()
+
+                # Capture move times
+                if turn == WHITE:
+                    last_move_times[WHITE] = end_time - start_time
+                elif turn == BLACK:
+                    last_move_times[BLACK] = end_time - start_time
+
+                if turn == WHITE and game_input[2] != None:
+                    shot_clocks[WHITE] -= last_move_times[WHITE]
+                elif turn == BLACK and game_input[2] != None:
+                    shot_clocks[BLACK] -= last_move_times[BLACK]
+
+            else:
+                print("Log opponent move below")
+                waiting = True
+                while waiting:
+                    user_input = input("Type: 'from_tile to_tile' (without quotes) and press Enter to log a move. example: e2 e4\n")
+
+                    if user_input.lower() == "exit":
+                        return False
+
+                    try:
+                        from_tile, to_tile = user_input.split()
+                    except ValueError:
+                        print("Invalid input format. Please enter moves in the format 'e2 e4'.")
+                        continue
+                    try:
+                        piece = next(p for p in chess_board.players[turn].pieces 
+                                    if p.location == from_tile)
+                        chess_board._move_piece(piece, to_tile)
+                        chess_board._update_tiles()
+                        print(chess_board.actions[-1])
+                        waiting = False
+                    except Exception as e:
+                        print("Move failed.. ")
+                        print(e)
+
+                # Capture move times
+                if turn == WHITE:
+                    last_move_times[WHITE] = end_time - start_time
+                elif turn == BLACK:
+                    last_move_times[BLACK] = end_time - start_time
+
+                if turn == WHITE and game_input[2] != None:
+                    shot_clocks[WHITE] -= last_move_times[WHITE]
+                elif turn == BLACK and game_input[2] != None:
+                    shot_clocks[BLACK] -= last_move_times[BLACK]
+
+            turn = BLACK if turn == WHITE else WHITE
+
+            if game_input[2] != None:
+                if shot_clocks[WHITE] <= 0 or shot_clocks[BLACK] <= 0:
+                    running = False
+
+                    if shot_clocks[WHITE]<=0:
+                        print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
+                    elif shot_clocks[BLACK]<=0:
+                        print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
+                    print(f"GAME OVER")
+
+    print("GAME LOG: ")
+    for player_action in chess_board.actions:
+        print(player_action)
+
 def start_game():
     print("Welcome to the Chess Engine!\n")
 
@@ -279,7 +432,7 @@ def start_game():
 
         elif len(game_input) == 1:
             print(f"\nGreat! Its a {game_input[0]} game.\n")
-            print(f"Would you like to play as White, Black, or Random?")
+            print(f"Will you be playing as White, Black, or Random?")
             user_input = str.lower(input("Type 'w' below for White.\nType 'b below for Black\nType 'r' below for Random\nType 'exit' at anytime to leave the game.\n"))
 
             if user_input == 'w':
@@ -296,12 +449,14 @@ def start_game():
 
         elif len(game_input) == 0:
             print(f"\nWelcome! Answer a few questions to setup your game.\n")
-            print("Would you like to play 2P or against a bot?")
-            user_input = str.lower(input("Type '2P' below for 2 Player pass and play. \nType 'bot' to play against a bot.\nType 'exit' at anytime to leave the game.\n")).strip()
+            print("Would you like to play 2P, against a bot, or use a bot to play an opponent?")
+            user_input = str.lower(input("Type '2P' below for 2 Player pass and play. \nType 'bot' to play against a bot.\nType 'aid' to get live move recomendations. \nType 'exit' at anytime to leave the game.\n")).strip()
 
             if user_input == '2p':
                 game_input.append(user_input)
             elif user_input == 'bot':
+                game_input.append(user_input)
+            elif user_input == 'aid':
                 game_input.append(user_input)
 
         if user_input == 'exit':
@@ -320,7 +475,7 @@ def start_game():
     hold = input("\nEnter anything other than exit in terminal to start the game\n")
     if hold == 'exit':
         print("GAME OVER\n")
-        return
+        return False
 
     if hold == "debug" or "DEBUG":
         game_input.append(hold)
