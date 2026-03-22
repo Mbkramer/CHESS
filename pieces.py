@@ -82,171 +82,61 @@ class Pawn(Piece):
 
     def set_moves(self, board, opp_actions) -> None:
 
-        self.moves: str = []
+        self.moves = []
 
-        # generate possible moves for pawn based on color and location
-        # Pawns can move 1 or 2 spaces forward on their first move, and 1 space forward on subsequent moves
-        # Pawns can capture diagonally, but cannot move forward if the tile is occupied by any piece
+        col  = self.location[0]
+        row  = int(self.location[1])
+        col_i = ord(col)  # 97='a' .. 104='h'
 
-        # White Pawn
-        if self.color == WHITE:
+        direction  = 1 if self.color == WHITE else -1
+        ep_row     = 5 if self.color == WHITE else 4  # rank where en passant is possible
+        cap_row    = row + direction                   # rank of diagonal capture / ep target
 
-            step_one_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 1}")
-            step_two_occupied = True
+        # ── Forward moves ────────────────────────────────────────────────────
+        step_one = f"{col}{row + direction}"
+        if not _check_tile_occupied(board, step_one):
+            self.moves.append(step_one)
+
             if self.location == self.starting_location:
-                step_two_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) + 2}")
+                step_two = f"{col}{row + 2 * direction}"
+                if not _check_tile_occupied(board, step_two):
+                    self.moves.append(step_two)
 
-            # Step Forward
-            if not step_one_occupied:
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) + 1}")
-            if self.location == self.starting_location and not step_one_occupied and not step_two_occupied:
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) + 2}")
+        # ── Diagonal captures ────────────────────────────────────────────────
+        if col_i > 97:  # has a file to the left
+            take_left = f"{chr(col_i - 1)}{cap_row}"
+            if _check_tile_occupied_by_opponent(board, take_left, self.color):
+                self.moves.append(take_left)
 
-            # Capture Diagonally
-            ascii_value = ord(self.location[0])
-            row = int(self.location[1])
+        if col_i < 104:  # has a file to the right
+            take_right = f"{chr(col_i + 1)}{cap_row}"
+            if _check_tile_occupied_by_opponent(board, take_right, self.color):
+                self.moves.append(take_right)
 
-            take_left = f"{chr(ascii_value - 1)}{row + 1}"
-            take_right = f"{chr(ascii_value + 1)}{row + 1}"
+        # ── En passant ───────────────────────────────────────────────────────
+        # Only possible when this pawn is on the en-passant rank and there
+        # was a previous move to examine.
+        if row == ep_row and opp_actions:
+            last  = opp_actions[-1]
+            start = last.from_tile
+            jump  = last.to_tile
 
-            if ascii_value == 104:
-                if _check_tile_occupied_by_opponent(board, take_left, self.color):
-                    self.moves.append(take_left)
-            elif ascii_value == 97:
-                if _check_tile_occupied_by_opponent(board, take_right, self.color):
-                    self.moves.append(take_right)
-            else:
-                if _check_tile_occupied_by_opponent(board, take_left, self.color):
-                    self.moves.append(take_left)
-                if _check_tile_occupied_by_opponent(board, take_right, self.color):
-                    self.moves.append(take_right)
+            for delta in (-1, 1):
+                if not (97 <= col_i + delta <= 104):
+                    continue  # off the board
 
-            # En Passant
-            if row != 5:
-                pass
-            else:
+                target_sq = f"{chr(col_i + delta)}{row}"
+                target_pawn = _check_tile_piece(board, target_sq)
 
-                if ascii_value == 104:
-                    target_left = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_left)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
-                                self.moves.append(take_left)
-
-                elif ascii_value == 97:
-                    target_right = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_right)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
-                                self.moves.append(take_right)
-                else:
-                    
-                    target_left = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_left)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
-                                self.moves.append(take_left)
-                            
-                    target_right = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_right)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(start[1]) - int(jump[1]) == 2):
-                                self.moves.append(take_right)
-
-                
-        # Black Pawn
-        elif self.color == BLACK:
-
-            step_one_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 1}")
-            step_two_occupied = True
-            if self.location == self.starting_location:
-                step_two_occupied = _check_tile_occupied(board, f"{self.location[0]}{int(self.location[1]) - 2}")
-
-            if not step_one_occupied:
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) - 1}")
-            if self.location == self.starting_location and not step_one_occupied and not step_two_occupied:
-                self.moves.append(f"{self.location[0]}{int(self.location[1]) - 2}")
-            
-            # Capture Diagonally
-            ascii_value = ord(self.location[0])
-            row = int(self.location[1])
-
-            take_left = f"{chr(ascii_value - 1)}{row - 1}"
-            take_right = f"{chr(ascii_value + 1)}{row - 1}"
-
-            if ascii_value == 104:
-                if _check_tile_occupied_by_opponent(board, take_left, self.color):
-                    self.moves.append(take_left)
-            elif ascii_value == 97:
-                if _check_tile_occupied_by_opponent(board, take_right, self.color):
-                    self.moves.append(take_right)
-            else:
-                if _check_tile_occupied_by_opponent(board, take_left, self.color):
-                    self.moves.append(take_left)
-                if _check_tile_occupied_by_opponent(board, take_right, self.color):
-                    self.moves.append(take_right)
-            
-            # En Passant
-            if row != 4:
-                pass
-            else:
-                if ascii_value == 104:
-                    target_left = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_left)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
-                                self.moves.append(take_left)
-
-                elif ascii_value == 97:
-                    target_right = f"{chr(ascii_value + 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_right)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
-                                self.moves.append(take_right)
-                else:
-                    target_left = f"{chr(ascii_value - 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_left)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
-                                self.moves.append(take_left)
-                            
-                    target_right = f"{chr(ascii_value + 1)}{row}"
-                    target_pawn = _check_tile_piece(board, target_right)
-                    if target_pawn != None:
-                        if target_pawn.name == "P" and opp_actions:
-                            last = opp_actions[-1]
-                            start = last.from_tile
-                            jump  = last.to_tile
-                            if target_pawn.color != self.color and (int(jump[1]) - int(start[1]) == 2):
-                                self.moves.append(take_right)
+                if (
+                    target_pawn is not None
+                    and target_pawn.name == "P"
+                    and target_pawn.color != self.color
+                    and jump == target_sq                          # that pawn is the one that just moved
+                    and abs(int(jump[1]) - int(start[1])) == 2    # and it was a two-square advance
+                ):
+                    ep_capture = f"{chr(col_i + delta)}{cap_row}"
+                    self.moves.append(ep_capture)
 
 
 class Knight(Piece):
@@ -385,6 +275,7 @@ class Bishop(Piece):
 class Rook(Piece):
     def __init__(self, color: str, location: str, i: int):
         id = f'{color}R{i+1}'
+        self.starting_location = location
         super().__init__(color, "R", 5, location, id)
 
     def set_moves(self, board, opp_actions):
@@ -648,17 +539,34 @@ class King(Piece):
 
             # Castling
             if self.location == self.starting_location and self.check == False:
-                # Check for Kingside Castling
-                if _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None:
+                # Kingside: f and g must be empty, rook on h must not have moved
+                if (
+                    _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None
+                    and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None
+                ):
                     rook = _check_tile_piece(board, f"{chr(ascii_col + 3)}{row}")
-                    if rook is not None and rook.name == "R" and rook.color == self.color:
+                    if (
+                        rook is not None
+                        and rook.name == "R"
+                        and rook.color == self.color
+                        and rook.starting_location is not None
+                    ):
                         self.moves.append(f"{chr(ascii_col + 2)}{row}")
-                        self.castle = "KS"
+                        self.castle += "KS"
 
-                # Check for Queenside Castling
-                if _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}") is None and _check_tile_piece(board, f"{chr(ascii_col - 2)}{row}") is None and _check_tile_piece(board, f"{chr(ascii_col - 3)}{row}") is None:
+                # Queenside: d, c, b must be empty, rook on a must not have moved
+                if (
+                    ascii_col - 4 >= 97
+                    and _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}") is None
+                    and _check_tile_piece(board, f"{chr(ascii_col - 2)}{row}") is None
+                    and _check_tile_piece(board, f"{chr(ascii_col - 3)}{row}") is None
+                ):
                     rook = _check_tile_piece(board, f"{chr(ascii_col - 4)}{row}")
-                    if rook is not None and rook.name == "R" and rook.color == self.color:
+                    if (
+                        rook is not None
+                        and rook.name == "R"
+                        and rook.color == self.color
+                        and rook.starting_location is not None
+                    ):
                         self.moves.append(f"{chr(ascii_col - 2)}{row}")
-                        self.castle = "QS"
-
+                        self.castle += "QS"

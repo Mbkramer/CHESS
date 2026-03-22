@@ -188,6 +188,37 @@ class ChessBoard:
                     
                 tile.place_piece(piece)
 
+    def _fast_update_tiles(self) -> None:
+        """
+        Lightweight tile refresh for PGN replay / training data generation.
+        Skips _cut_illegal_moves and possible_move rebuilding — python-chess
+        already validated every move, so we only need raw move generation
+        for the tensor snapshot and piece location tracking.
+        """
+        self._sync_board()
+        for color in COLORS:
+            opp = BLACK if color == WHITE else WHITE
+            self.players[color].update_moves(self, self.players[opp].actions)
+        for color in COLORS:
+            self.players[color].checked = self._test_check(color)
+
+    def _refresh_search_state_after_move(self, side_that_just_moved: str) -> None:
+        """
+        Lightweight post-move refresh for search nodes.
+        Regenerates raw (pseudo-legal) moves and check flags only.
+        Does NOT call _cut_illegal_moves — the search handles illegality
+        by detecting if the moving side left its king in check.
+
+        USED ONLY FOR PGN TRAIN
+        """
+        self._sync_board()
+
+        self.players[WHITE].update_moves(self, self.players[BLACK].actions)
+        self.players[BLACK].update_moves(self, self.players[WHITE].actions)
+
+        self.players[WHITE].checked = self._test_check(WHITE)
+        self.players[BLACK].checked = self._test_check(BLACK)
+
     def _refresh_search_state_for_turn(self, turn: str) -> None:
         opp = BLACK if turn == WHITE else WHITE
 
@@ -267,63 +298,55 @@ class ChessBoard:
         return moves_out
     
     def _snapshot_state(self):
-        state = {
-            "checked": {},
-            "mated": {},
-            "possible_moves": {},
-            "player_pieces": {},
-            "player_points": {},
-            "player_actions": {},
-            "player_taken_pieces": {},
-            "player_taken_pieces_str": {},
-            "actions": list(self.actions),
-            "pieces": {},
-        }
-
+        """Lightweight snapshot — stores only what search moves change."""
+        pieces_state = {}
         for color in COLORS:
-            player = self.players[color]
-            state["checked"][color] = player.checked
-            state["mated"][color] = player.mated
-            state["possible_moves"][color] = list(getattr(player, "possible_moves", []))
-            state["player_pieces"][color] = list(player.pieces)
-            state["player_points"][color] = player.points
-            state["player_actions"][color] = list(player.actions)
-            state["player_taken_pieces"][color] = list(player.taken_pieces)
-            state["player_taken_pieces_str"][color] = player.taken_pieces_str
+            for piece in self.players[color].pieces:
+                pieces_state[id(piece)] = (
+                    piece.location,
+                    piece.moves,          # list ref — copy below
+                    getattr(piece, 'castle', ''),
+                    getattr(piece, 'starting_location', None),
+                    getattr(piece, 'check', False),
+                )
 
-            for piece in player.pieces:
-                state["pieces"][id(piece)] = {
-                    "location": piece.location,
-                    "moves": list(piece.moves),
-                    "castle": getattr(piece, "castle", ""),
-                    "starting_location": getattr(piece, "starting_location", None),
-                    "check": getattr(piece, "check", False),
-                }
-
-        return state
+        return {
+            "actions":        self.actions,          # list ref — copy below
+            "pieces_state":   pieces_state,
+            "player_pieces":  {c: list(self.players[c].pieces)  for c in COLORS},
+            "player_points":  {c: self.players[c].points        for c in COLORS},
+            "player_actions": {c: self.players[c].actions       for c in COLORS},
+            "player_taken":   {c: list(self.players[c].taken_pieces) for c in COLORS},
+            "player_taken_str": {c: self.players[c].taken_pieces_str for c in COLORS},
+            "checked":        {c: self.players[c].checked       for c in COLORS},
+            "mated":          {c: self.players[c].mated         for c in COLORS},
+            "possible_moves": {c: self.players[c].possible_moves for c in COLORS},
+        }
 
 
     def _restore_state(self, state):
+        """Restore from lightweight snapshot."""
         for color in COLORS:
-            player = self.players[color]
-            player.checked = state["checked"][color]
-            player.mated = state["mated"][color]
-            player.possible_moves = list(state["possible_moves"][color])
-            player.pieces = list(state["player_pieces"][color])
-            player.points = state["player_points"][color]
-            player.actions = list(state["player_actions"][color])
-            player.taken_pieces = list(state["player_taken_pieces"][color])
-            player.taken_pieces_str = state["player_taken_pieces_str"][color]
+            p = self.players[color]
+            p.pieces           = state["player_pieces"][color]
+            p.points           = state["player_points"][color]
+            p.actions          = state["player_actions"][color]
+            p.taken_pieces     = state["player_taken"][color]
+            p.taken_pieces_str = state["player_taken_str"][color]
+            p.checked          = state["checked"][color]
+            p.mated            = state["mated"][color]
+            p.possible_moves   = state["possible_moves"][color]
 
-            for piece in player.pieces:
-                ps = state["pieces"][id(piece)]
-                piece.location = ps["location"]
-                piece.moves = list(ps["moves"])
-                piece.castle = ps["castle"]
-                piece.starting_location = ps["starting_location"]
-                piece.check = ps["check"]
+            for piece in p.pieces:
+                ps = state["pieces_state"].get(id(piece))
+                if ps:
+                    piece.location          = ps[0]
+                    piece.moves             = list(ps[1])
+                    piece.castle            = ps[2]
+                    piece.starting_location = ps[3]
+                    piece.check             = ps[4]
 
-        self.actions = list(state["actions"])
+        self.actions = state["actions"]
         self._sync_board()
 
 

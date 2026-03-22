@@ -7,3 +7,4 @@ model.py
 pgn_replay.py
 tensor.py
 train.py
+migrate_checkpoints.py

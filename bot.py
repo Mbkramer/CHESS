@@ -1,17 +1,23 @@
 import os
-import torch
 import time
-from model import load_model
-from tensor import board_to_tensor
 from opening_book import choose_book_move, book_move_bonus
 
-# for now use generic path
-from model import load_model
+try:
+    import torch
+except Exception:
+    torch = None
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/best_pgn_2000_2400_v2.pt")
+try:
+    from model import load_model
+    from tensor import board_to_tensor
+except Exception:
+    load_model = None
+    board_to_tensor = None
+
+MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/checkmates_pgn_v3.pt")
 
 model = None
-if os.path.exists(MODEL_PATH):
+if load_model is not None and os.path.exists(MODEL_PATH):
     try:
         model = load_model(MODEL_PATH)
         model.eval()
@@ -71,8 +77,11 @@ def game_phase(chess_board):
     # --- OTHERWISE ---
     return EARLY
 
-import chess
-import chess.pgn
+try:
+    import chess
+    import chess.pgn
+except Exception:
+    chess = None
 from datetime import datetime
 
 def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
@@ -83,6 +92,9 @@ def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
     result:
         "1-0", "0-1", "1/2-1/2", or "*"
     """
+
+    if chess is None:
+        raise RuntimeError("python-chess is required for PGN export")
 
     board = chess.Board()
     game = chess.pgn.Game()
@@ -465,6 +477,22 @@ def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
 
 # --- Search depth handling ----------------------------------------------
 
+def _square_pressure(board, square: str, color: str) -> tuple[int, int]:
+    """Return (attackers, defenders) for `color` pieces if moved to `square`."""
+    opp = BLACK if color == WHITE else WHITE
+    attackers = 0
+    defenders = 0
+
+    for piece in board.players[opp].pieces:
+        if square in piece.moves:
+            attackers += 1
+
+    for piece in board.players[color].pieces:
+        if square in piece.moves:
+            defenders += 1
+
+    return attackers, defenders
+
 def _should_extend(piece, move, chess_board):
     target_tile = chess_board._get_tile(move)
 
@@ -489,23 +517,134 @@ def _adjusted_depth(base_depth, num_moves, total_pieces):
     return min(d, base_depth + 1)
 
 
+def _complexity_adjusted_depth(base_depth, num_moves, total_pieces, in_check, tactical, king_safety_gap):
+    d = _adjusted_depth(base_depth, num_moves, total_pieces)
+    if in_check or tactical:
+        d += 1
+    if king_safety_gap >= 0.55 and total_pieces > 10:
+        d += 1
+    # Keep runtime stable for interactive depth-3 play.
+    return min(d, base_depth + 1)
+
+
+def _is_tactical_position(chess_board, turn: str, moves: list[tuple], capture_count: int) -> bool:
+    """Cheap tacticality signal used for move-cap widening."""
+    if chess_board.players[turn].checked:
+        return True
+    if capture_count >= 4:
+        return True
+
+    # Quick proxy: plausible checking moves indicate tactical tension.
+    plausible_checks = 0
+    for piece, move, _ in moves:
+        if _could_plausibly_give_check(chess_board, piece, move):
+            plausible_checks += 1
+            if plausible_checks >= 1:
+                return True
+    return False
+
+
+def _hanging_pieces(chess_board, color: str) -> float:
+    """Penalty for loose/hanging pieces from color perspective."""
+    score = 0.0
+    for piece in chess_board.players[color].pieces:
+        if piece.name == "K":
+            continue
+        attackers, defenders = _square_pressure(chess_board, piece.location, color)
+        if attackers == 0:
+            continue
+
+        piece_weight = PIECE_VALUES[piece.name]
+        if attackers > defenders:
+            score -= 0.18 * piece_weight
+        elif defenders == 0:
+            score -= 0.1 * piece_weight
+    return score
+
+
+def _development_score(chess_board, color: str) -> float:
+    """Opening/middlegame development and pawn-structure guidance."""
+    phase = game_phase(chess_board)
+    if phase == LATE:
+        return 0.0
+
+    score = 0.0
+    row_home = "1" if color == WHITE else "8"
+    center_files = {"d", "e"}
+    central_pawn_targets = {"d4", "e4"} if color == WHITE else {"d5", "e5"}
+    start_minor_squares = {"b" + row_home, "g" + row_home, "c" + row_home, "f" + row_home}
+
+    friendly = chess_board.players[color].pieces
+    for piece in friendly:
+        if piece.name in ("N", "B") and piece.location not in start_minor_squares:
+            score += 0.12
+
+    # Encourage occupied central pawn squares in early/midgame.
+    for sq in central_pawn_targets:
+        tile = chess_board._get_tile(sq)
+        if tile and tile.piece and tile.piece.color == color and tile.piece.name == "P":
+            score += 0.2
+            atk, dfn = _square_pressure(chess_board, sq, color)
+            if dfn >= atk:
+                score += 0.08
+
+    # Penalize early unsupported flank pawn pushes.
+    history_len = len(getattr(chess_board, "actions", []))
+    for piece in friendly:
+        if piece.name != "P":
+            continue
+        if piece.location[0] in ("a", "h") and history_len <= 18:
+            start_rank = 2 if color == WHITE else 7
+            advanced = abs(int(piece.location[1]) - start_rank)
+            score -= 0.06 * max(0, advanced - 1)
+
+        # Backward-ish central pawn heuristic: central pawn blocked while adjacent file lacks support.
+        if piece.location[0] in center_files:
+            forward = int(piece.location[1]) + (1 if color == WHITE else -1)
+            if 1 <= forward <= 8:
+                front_sq = f"{piece.location[0]}{forward}"
+                front_tile = chess_board._get_tile(front_sq)
+                if front_tile and front_tile.piece is not None:
+                    left_idx = COLUMNS.index(piece.location[0]) - 1
+                    right_idx = COLUMNS.index(piece.location[0]) + 1
+                    neighbor_files = []
+                    if left_idx >= 0:
+                        neighbor_files.append(COLUMNS[left_idx])
+                    if right_idx <= 7:
+                        neighbor_files.append(COLUMNS[right_idx])
+                    has_neighbor = any(
+                        p.name == "P" and p.location[0] in neighbor_files
+                        for p in friendly
+                    )
+                    if not has_neighbor:
+                        score -= 0.08
+
+    return score
+
 # --- Evaluatations -----------------------------------------------------------
 
 def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, repertoire_name="balanced"):
-    legal_moves = _search_legal_moves(chess_board, turn, repertoire_name=repertoire_name)
+    # Don't score moves — just count them
+    has_moves = any(
+        True
+        for piece in chess_board.players[turn].pieces
+        for move in piece.moves
+        if not (chess_board._get_tile(move) and
+                chess_board._get_tile(move).piece and
+                chess_board._get_tile(move).piece.name == "K")
+    )
     in_check = chess_board.players[turn].checked
 
-    if len(legal_moves) == 0:
+    if not has_moves:
         if in_check:
             return -MATE_SCORE + depth if turn == root_color else MATE_SCORE - depth
         return 0.0
-
     return None
 
 def evaluate(chess_board, color) -> float:
 
     model_score = 0.0
-    if model is not None:
+    if model is not None and torch is not None and board_to_tensor is not None:
         tensor = board_to_tensor(chess_board)
         x = torch.tensor(tensor).unsqueeze(0).float()
         with torch.no_grad():
@@ -531,22 +670,34 @@ def evaluate(chess_board, color) -> float:
     classical += _rook_on_open_file(chess_board, WHITE)
     classical -= _rook_on_open_file(chess_board, BLACK)
 
+    classical += _hanging_pieces(chess_board, WHITE)
+    classical -= _hanging_pieces(chess_board, BLACK)
+
+    classical += _development_score(chess_board, WHITE)
+    classical -= _development_score(chess_board, BLACK)
+
     # Phase Signals
 
     phase = game_phase(chess_board)
-
 
     model_scaled = model_score * 5
 
     # Clamp model influence (important)
     model_scaled = max(min(model_scaled, 3), -3)
 
-    # Phase weights
-    model_weight = 0.10
-    if phase == "MIDDLE":
-        model_weight = 0.20
-    elif phase == "LATE":
-        model_weight = 0.25  
+    # Phase weights — model is strongest early (trained on human openings, suppresses
+    # positional blunders), tapers as game becomes tactical (classical eval more reliable).
+    # Also use ply count for a sharper early-game boost independent of piece count.
+    ply_count = len(getattr(chess_board, "actions", []))
+    if ply_count <= 10:
+        # Deep opening: model has strongest signal, classical can misread piece activity
+        model_weight = 0.35
+    elif phase == EARLY:
+        model_weight = 0.25
+    elif phase == MIDDLE:
+        model_weight = 0.15
+    else:  # LATE
+        model_weight = 0.08
 
     classical_weight = 1 - model_weight
 
@@ -697,6 +848,110 @@ def _is_quiet_backtrack(board, piece, move: str) -> bool:
         getattr(prev_own_action, "from_tile", None) == move
     )
 
+
+def _see(board, square: str, color: str) -> float:
+    """
+    Static Exchange Evaluation (SEE).
+
+    Simulates the full capture sequence on `square` assuming `color` is
+    the side that just moved a piece there, and returns the net material
+    gain (positive = profitable for `color`, negative = losing).
+
+    Uses the cheapest-attacker heuristic: each side always recaptures
+    with its least valuable piece.  This is an approximation — it ignores
+    pins and discovered attacks — but it is fast (no board simulation) and
+    accurate enough to filter clearly losing moves at order time.
+
+    Example: White bishop moves to d2, Black queen on a5 can take for free.
+      _see(board, 'd2', WHITE) → roughly -3  (White loses a bishop)
+    """
+    opp = BLACK if color == WHITE else WHITE
+
+    # Value of the piece that just arrived on `square`
+    tile = board._get_tile(square)
+    if tile is None or tile.piece is None:
+        return 0.0
+    target_val = PIECE_VALUES[tile.piece.name]
+
+    # Find the cheapest opponent attacker
+    cheapest_val = float('inf')
+    for p in board.players[opp].pieces:
+        if square in p.moves and p.name != 'K':
+            val = PIECE_VALUES[p.name]
+            if val < cheapest_val:
+                cheapest_val = val
+
+    if cheapest_val == float('inf'):
+        # Nobody can take — square is safe
+        return 0.0
+
+    # Opponent captures: they gain `target_val`, then we recapture
+    # Find our cheapest recapture after the exchange
+    recapture_val = float('inf')
+    for p in board.players[color].pieces:
+        if p.location != square and square in p.moves and p.name != 'K':
+            val = PIECE_VALUES[p.name]
+            if val < recapture_val:
+                recapture_val = val
+
+    if recapture_val == float('inf'):
+        # Opponent takes for free — pure loss of target piece
+        return -target_val
+
+    # Opponent gains target_val, we recapture gaining cheapest_val,
+    # net from color's perspective: we lose target, gain back cheapest_attacker
+    # (simplified one-recapture SEE — accurate for the common cases)
+    return cheapest_val - target_val
+
+
+def _passes_opening_sanity(board, piece, move: str) -> bool:
+    """Reject legal moves that are positionally/safety suspect."""
+    target_tile = board._get_tile(move)
+    is_capture = (
+        target_tile is not None and
+        target_tile.piece is not None and
+        target_tile.piece.color != piece.color
+    )
+
+    in_opening = _opening_phase(board)
+
+    if in_opening:
+        # Avoid early flank pawn pushes unless tactical.
+        if piece.name == "P" and move[0] in ("a", "h") and len(getattr(board, "actions", [])) <= 8 and not is_capture:
+            return False
+
+        # Avoid early queen wandering unless tactical.
+        if piece.name == "Q" and len(getattr(board, "actions", [])) <= 8 and not is_capture:
+            return False
+
+    # --- SEE filter: reject any move that drops material for free ---
+    # Simulate placing the piece on the target square, then run SEE.
+    # We check this always (not just opening) since walking into a free
+    # capture is never correct regardless of phase.
+    if not is_capture:
+        # For quiet moves: temporarily place piece on target, check SEE
+        snap = board._snapshot_state()
+        try:
+            board._move_piece(piece, move, simulate=True)
+            board._sync_board()
+            see_score = _see(board, move, piece.color)
+        except Exception:
+            see_score = 0.0
+        finally:
+            board._restore_state(snap)
+
+        # Reject if clearly losing (losing more than a pawn's worth for free)
+        if see_score < -1.0:
+            return False
+
+    if in_opening:
+        # Avoid moving into obvious pressure without compensation (count-based fallback).
+        to_attackers, to_defenders = _square_pressure(board, move, piece.color)
+        if to_attackers > to_defenders + 1 and not is_capture:
+            return False
+
+    return True
+
 def move_order_score(board, piece, move, color=None, repertoire_name="balanced"):
     score = 0.0
     target_tile = board._get_tile(move)
@@ -723,8 +978,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 3. Checks 
     if _could_plausibly_give_check(board, piece, move):
-        if _move_gives_check(board, piece, move):
-            score += 8.0
+        score+=4
 
     # 4. If castle available prioritize
     if piece.color == WHITE and piece.name == "K":
@@ -758,7 +1012,133 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     if _is_quiet_backtrack(board, piece, move):
         score -= 0.30
 
+    # 8. SEE-based safety signal.
+    # For quiet moves: simulate placing the piece on the target square and
+    # run a one-recapture Static Exchange Evaluation.  A clearly losing
+    # exchange gets a heavy penalty; a safe square gets a small bonus.
+    # For captures: MVV-LVA already handles ordering, but penalise losing
+    # captures (e.g. NxQ where the queen is defended) to push them below
+    # safe moves.
+    piece_val = PIECE_VALUES[piece.name]
+    is_quiet = not (target_tile and target_tile.piece and target_tile.piece.color != piece.color)
+
+    if is_quiet:
+        snap = board._snapshot_state()
+        try:
+            board._move_piece(piece, move, simulate=True)
+            board._sync_board()
+            see_score = _see(board, move, piece.color)
+        except Exception:
+            see_score = 0.0
+        finally:
+            board._restore_state(snap)
+
+        if see_score < -0.5:
+            # Losing material for free — strong penalty scaled by loss magnitude
+            score -= 3.0 + abs(see_score)
+        elif see_score == 0.0:
+            # Neutral exchange — small escape bonus if piece was already under attack
+            from_attackers, from_defenders = _square_pressure(board, piece.location, piece.color)
+            if from_attackers > from_defenders:
+                score += 0.4
+    else:
+        # Capture: penalise if we're losing the exchange (e.g. BxN where N is defended by P)
+        victim_val = PIECE_VALUES[target_tile.piece.name]
+        if piece_val > victim_val:
+            to_attackers, to_defenders = _square_pressure(board, move, piece.color)
+            if to_attackers > 0:
+                # We're capturing with a more valuable piece into a defended square
+                score -= 1.5 * (piece_val - victim_val)
+
     return score
+
+
+def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
+                turn: str, depth: int = 4, deadline: float = None) -> float:
+    """
+    Internal quiescence worker with explicit turn tracking.
+    """
+    if deadline is not None and time.time() >= deadline:
+        return evaluate(chess_board, root_color)
+
+    maximizing = (turn == root_color)
+    next_turn = BLACK if turn == WHITE else WHITE
+
+    stand_pat = evaluate(chess_board, root_color)
+
+    if maximizing:
+        if stand_pat >= beta:
+            return beta
+        DELTA = 9.5
+        if stand_pat < alpha - DELTA:
+            return alpha
+        if stand_pat > alpha:
+            alpha = stand_pat
+    else:
+        if stand_pat <= alpha:
+            return alpha
+        DELTA = 9.5
+        if stand_pat > beta + DELTA:
+            return beta
+        if stand_pat < beta:
+            beta = stand_pat
+
+    if depth == 0:
+        return stand_pat
+
+    # Collect captures only (skip king-capture moves)
+    captures = []
+    for piece in chess_board.players[turn].pieces:
+        for move in piece.moves:
+            target_tile = chess_board._get_tile(move)
+            if target_tile and target_tile.piece and target_tile.piece.color != piece.color:
+                if target_tile.piece.name == "K":
+                    continue
+                victim_val = PIECE_VALUES[target_tile.piece.name]
+                attacker_val = PIECE_VALUES[piece.name]
+                # MVV-LVA score: prefer capturing high-value pieces with low-value attackers
+                order = victim_val * 10 - attacker_val
+                captures.append((piece, move, order))
+
+    if not captures:
+        return stand_pat
+
+    captures.sort(key=lambda x: x[2], reverse=True)
+
+    best = stand_pat
+    for piece, move, _ in captures[:8]:  # cap at 8 captures per node
+        snap = chess_board._snapshot_state()
+        try:
+            chess_board._move_piece(piece, move, simulate=True)
+            chess_board._refresh_search_state_for_turn(WHITE)
+            chess_board._refresh_search_state_for_turn(BLACK)
+
+            score = _quiescence(chess_board, alpha, beta, root_color, next_turn, depth - 1, deadline)
+        except ValueError as e:
+            if "kings cannot be captured" in str(e):
+                chess_board._restore_state(snap)
+                continue
+            chess_board._restore_state(snap)
+            raise
+        finally:
+            chess_board._restore_state(snap)
+
+        if maximizing:
+            if score > best:
+                best = score
+            if score > alpha:
+                alpha = score
+            if alpha >= beta:
+                break
+        else:
+            if score < best:
+                best = score
+            if score < beta:
+                beta = score
+            if beta <= alpha:
+                break
+
+    return best
 
 
 def minimax(chess_board, depth: int, turn: str, root_color: str,
@@ -789,9 +1169,10 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             _debug_log(debug, ply, f"{role} {COLOR[turn]} terminal => {_fmt_score(terminal)}")
         return terminal
 
-    # 2. DEPTH LIMIT
+    # 2. DEPTH LIMIT — run quiescence search instead of raw static eval
     if depth == 0:
-        score = evaluate(chess_board, root_color)
+        score = _quiescence(chess_board, alpha, beta, root_color, turn,
+                            depth=4, deadline=deadline)
         if debug >= 2:
             _debug_log(debug, ply, f"{role} {COLOR[turn]} leaf eval => {_fmt_score(score)}")
         return score
@@ -967,13 +1348,22 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
     history_len = len(getattr(chess_board, "actions", []))
 
     if use_opening_book and history_len <= MAX_BOOK_PLIES:
-        book_choice = choose_book_move(chess_board, color, repertoire_name=repertoire_name)
+        weighted_book = os.environ.get("CHESS_BOOK_WEIGHTED", "1") != "0"
+        book_choice = choose_book_move(
+            chess_board,
+            color,
+            repertoire_name=repertoire_name,
+            weighted=weighted_book,
+            deterministic_top=not weighted_book,
+        )
         if book_choice is not None:
             from_sq, to_sq, meta = book_choice
-            if debug >= 1:
-                opening_name = meta.get("name") or meta.get("opening") or "book"
-                _debug_log(debug, 0, f"BOOK {COLOR[color]} chooses {from_sq}->{to_sq} ({opening_name})")
-            return (from_sq, to_sq)
+            book_piece = next((p for p in chess_board.players[color].pieces if p.location == from_sq), None)
+            if book_piece is not None and _passes_opening_sanity(chess_board, book_piece, to_sq):
+                if debug >= 1:
+                    opening_name = meta.get("name") or meta.get("opening") or "book"
+                    _debug_log(debug, 0, f"BOOK {COLOR[color]} chooses {from_sq}->{to_sq} ({opening_name})")
+                return (from_sq, to_sq)
 
     best_score = float('-inf')
     chosen = None
@@ -1002,13 +1392,39 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
     # Add search depth for limited move list and reduced piece counts
     num_moves = len(candidate_moves)
     total_pieces = len(chess_board.players[WHITE].pieces) + len(chess_board.players[BLACK].pieces)
-    search_depth = _adjusted_depth(depth, num_moves, total_pieces)
+    approx_king_safety_gap = abs(
+        _king_safety(chess_board, WHITE) - _king_safety(chess_board, BLACK)
+    )
 
     candidate_moves.sort(key=lambda pm: pm[2], reverse=True)
 
-    # Softer root cap
-    if len(candidate_moves) > 24 and total_pieces > 12:
-        candidate_moves = candidate_moves[:16]
+    root_capture_count = 0
+    for piece, move, _ in candidate_moves:
+        target_tile = chess_board._get_tile(move)
+        if target_tile and target_tile.piece and target_tile.piece.color != piece.color:
+            root_capture_count += 1
+
+    root_tactical = _is_tactical_position(chess_board, color, candidate_moves, root_capture_count)
+    search_depth = _complexity_adjusted_depth(
+        depth,
+        num_moves,
+        total_pieces,
+        chess_board.players[color].checked,
+        root_tactical,
+        approx_king_safety_gap,
+    )
+    root_cap = 18
+    if chess_board.players[color].checked:
+        root_cap = 22
+    elif root_tactical:
+        root_cap = 20
+    elif history_len > 10:
+        root_cap = 16
+    else:
+        root_cap = 14
+
+    if len(candidate_moves) > root_cap and total_pieces > 10:
+        candidate_moves = candidate_moves[:root_cap]
 
     if debug >= 1:
         _debug_log(

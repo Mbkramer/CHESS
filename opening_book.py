@@ -135,8 +135,9 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         name="Italian Game",
         eco="C50-C54",
         continuations=(
-            BookMove("c2c3", 2.0),
-            BookMove("d2d3", 1.6),
+            BookMove("c2c3", 2.4),
+            BookMove("d2d3", 2.0),
+            BookMove("d2d4", 1.7),
             BookMove("b1c3", 1.0),
         ),
         style_tags=("development",),
@@ -279,9 +280,10 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
         name="Queen Pawn Game",
         eco="D00-D69",
         continuations=(
-            BookMove("c2c4", 4.0),
+            BookMove("c2c4", 4.4),
             BookMove("g1f3", 1.2),
             BookMove("c1f4", 1.0),
+            BookMove("e2e3", 1.2),
         ),
         style_tags=("classical",),
     ),
@@ -532,14 +534,23 @@ def legal_book_moves(board, color: str, repertoire_name: str = "balanced") -> Li
     return out
 
 
-def choose_book_move(board, color: str, repertoire_name: str = "balanced", weighted: bool = True) -> Optional[Tuple[str, str, Dict[str, str]]]:
+def choose_book_move(
+    board,
+    color: str,
+    repertoire_name: str = "balanced",
+    weighted: bool = True,
+    deterministic_top: bool = False,
+) -> Optional[Tuple[str, str, Dict[str, str]]]:
     candidates = legal_book_moves(board, color, repertoire_name=repertoire_name)
     if not candidates:
         return None
 
     moves = [m for m, _w, _name in candidates]
     weights = [w for _m, w, _name in candidates]
-    chosen = random.choices(moves, weights=weights, k=1)[0] if weighted else moves[0]
+    if deterministic_top:
+        chosen = max(candidates, key=lambda item: item[1])[0]
+    else:
+        chosen = random.choices(moves, weights=weights, k=1)[0] if weighted else moves[0]
 
     chosen_name = None
     for move, _weight, name in candidates:

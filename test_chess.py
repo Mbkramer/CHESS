@@ -4,6 +4,8 @@ import copy
 from chess_board import ChessBoard
 from player import PlayerAction
 from bot import best_move
+from bot import move_order_score, _passes_opening_sanity
+from opening_book import choose_book_move
 
 WHITE = 'W'
 BLACK = 'B'
@@ -576,6 +578,40 @@ class TestBot(ChessTestCase):
         b._update_tiles()
         self.assertFalse(b._test_check(WHITE))
         self.assert_board_consistent(b)
+
+
+class TestBotDecisionQuality(ChessTestCase):
+    def test_opening_sanity_rejects_early_queen_wander(self):
+        b = ChessBoard()
+        queen = self.assertPiece(b, "d1", name="Q", color=WHITE)
+        self.assertFalse(_passes_opening_sanity(b, queen, "h5"))
+
+    def test_opening_sanity_rejects_flank_pawn_push(self):
+        b = ChessBoard()
+        pawn = self.assertPiece(b, "a2", name="P", color=WHITE)
+        self.assertFalse(_passes_opening_sanity(b, pawn, "a4"))
+
+    def test_move_order_prioritizes_central_pawn_development(self):
+        b = ChessBoard()
+        center_pawn = self.assertPiece(b, "e2", name="P", color=WHITE)
+        flank_pawn = self.assertPiece(b, "a2", name="P", color=WHITE)
+
+        center_score = move_order_score(b, center_pawn, "e4", color=WHITE)
+        flank_score = move_order_score(b, flank_pawn, "a4", color=WHITE)
+        self.assertGreater(center_score, flank_score)
+
+    def test_book_can_pick_top_weight_deterministically(self):
+        b = ChessBoard()
+        book_move = choose_book_move(
+            b,
+            WHITE,
+            repertoire_name="balanced",
+            weighted=False,
+            deterministic_top=True,
+        )
+        self.assertIsNotNone(book_move)
+        from_sq, to_sq, _meta = book_move
+        self.assertEqual((from_sq, to_sq), ("e2", "e4"))
 
 
 if __name__ == '__main__':
