@@ -256,14 +256,15 @@ class ChessBoard:
                     if self._move_is_safe(color, piece, move):
                         legal.append(move)
 
-                except Exception as e:
-                    print(f"_cut_illegal_moves crash: color={color} piece={piece} at {piece.location} move={move}")
-                    raise
 
                 except ValueError as e:
                     msg = str(e)
                     if "kings cannot be captured" in msg or "cannot move onto own piece" in msg:
                         continue
+                    raise
+
+                except Exception as e:
+                    print(f"_cut_illegal_moves crash: color={color} piece={piece} at {piece.location} move={move}")
                     raise
 
             piece.moves = legal

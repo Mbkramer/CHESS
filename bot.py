@@ -31,7 +31,6 @@ BLACK = 'B'
 
 COLOR = {"W": "White", "B": "Black"}
 
-PIECE_VALUES = {'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 0}
 
 MAX_BOOK_PLIES = 12
 
@@ -258,9 +257,69 @@ PIECE_TABLES = {
     'K': KING_TABLE,
 }
 
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
+class EvalParams:
+    # ── Piece values (pawn anchored at 1.0 — DO NOT tune this) ──
+    knight_value: float = 3.0
+    bishop_value: float = 3.0
+    rook_value:   float = 5.0
+    queen_value:  float = 9.0
+
+    # ── Piece-Square Tables (flattened 64-value lists) ──
+    pawn_table:   List[float] = field(default_factory=lambda: list(PAWN_TABLE))
+    knight_table: List[float] = field(default_factory=lambda: list(KNIGHT_TABLE))
+    bishop_table: List[float] = field(default_factory=lambda: list(BISHOP_TABLE))
+    rook_table:   List[float] = field(default_factory=lambda: list(ROOK_TABLE))
+    queen_table:  List[float] = field(default_factory=lambda: list(QUEEN_TABLE))
+    king_table:   List[float] = field(default_factory=lambda: list(KING_TABLE))
+
+    # ── Pawn structure ──
+    doubled_pawn_penalty:   float = 0.30
+    isolated_pawn_penalty:  float = 0.35
+    connected_pawn_bonus:   float = 0.10
+    passed_pawn_base:       float = 0.15
+    passed_pawn_advance:    float = 0.10
+
+    # ── Mobility ──
+    mobility_weight: float = 0.05
+
+    # ── King safety ──
+    castle_bonus:          float = 0.75
+    pawn_shield_bonus:     float = 0.15
+    open_file_penalty:     float = 0.25
+    semi_open_file_penalty: float = 0.10
+    attacker_proximity_weight: float = 0.15
+
+    # ── Piece bonuses ──
+    bishop_pair_bonus:       float = 0.30
+    rook_open_file_bonus:    float = 0.25
+    rook_semi_open_bonus:    float = 0.10
+
+    # ── Hanging pieces ──
+    hanging_outnumbered_weight: float = 0.18
+    hanging_undefended_weight:  float = 0.10
+
+# Global instance — used by evaluate() at runtime
+EVAL_PARAMS = EvalParams()
+
+PIECE_VALUES = {'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9, 'K': 0}
+
+def _piece_value(name: str, p: EvalParams) -> float:
+    return {
+        'P': 1.0,
+        'N': p.knight_value,
+        'B': p.bishop_value,
+        'R': p.rook_value,
+        'Q': p.queen_value,
+        'K': 0.0,
+    }[name]
+
+
 COLUMNS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 ROWS    = ['1', '2', '3', '4', '5', '6', '7', '8']
-
 
 def _square_index(location: str, color: str) -> int:
     """Convert a square like 'e4' to a table index 0-63.
@@ -274,8 +333,19 @@ def _square_index(location: str, color: str) -> int:
         return (7 - row) * 8 + col  # rank 8 row=7 → index 0..7 (mirrored)
 
 
-def get_position_bonus(piece) -> float:
-    table = PIECE_TABLES.get(piece.name)
+# In get_position_bonus, pass params:
+def get_position_bonus(piece, p: EvalParams = None) -> float:
+    if p is None:
+        p = EVAL_PARAMS
+    tables = {
+        'P': p.pawn_table,
+        'N': p.knight_table,
+        'B': p.bishop_table,
+        'R': p.rook_table,
+        'Q': p.queen_table,
+        'K': p.king_table,
+    }
+    table = tables.get(piece.name)
     if table is None:
         return 0.0
     return table[_square_index(piece.location, piece.color)]
@@ -314,7 +384,7 @@ def _pawn_structure(chess_board, color) -> float:
 
         # ── Doubled pawn penalty ──────────────────────────────────────────
         if file_counts[col] > 1:
-            score -= 0.3
+            score -= EVAL_PARAMS.doubled_pawn_penalty
 
         # ── Isolated pawn penalty ─────────────────────────────────────────
         left_file  = COLUMNS[col_idx - 1] if col_idx > 0 else None
@@ -641,20 +711,24 @@ def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, reper
         return 0.0
     return None
 
-def evaluate(chess_board, color) -> float:
+def evaluate(chess_board, color, p=None) -> float:
+
+    if p is None:
+        p = EVAL_PARAMS
 
     model_score = 0.0
     if model is not None and torch is not None and board_to_tensor is not None:
-        tensor = board_to_tensor(chess_board)
+        tensor = board_to_tensor(chess_board, turn=color)
         x = torch.tensor(tensor).unsqueeze(0).float()
         with torch.no_grad():
             model_score = model(x).item()
 
     classical = 0.0
     for piece in chess_board.players[WHITE].pieces:
-        classical += PIECE_VALUES[piece.name] + get_position_bonus(piece)
+        # Fixed — passes p through so tuner candidate params are actually used:
+        classical += _piece_value(piece.name, p) + get_position_bonus(piece, p)
     for piece in chess_board.players[BLACK].pieces:
-        classical -= PIECE_VALUES[piece.name] + get_position_bonus(piece)
+        classical -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
 
     classical += _pawn_structure(chess_board, WHITE)
     classical -= _pawn_structure(chess_board, BLACK)
