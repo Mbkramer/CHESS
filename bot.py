@@ -14,7 +14,7 @@ except Exception:
     load_model = None
     board_to_tensor = None
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/checkmates_pgn_v3.pt")
+MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v4.pt")
 
 model = None
 if load_model is not None and os.path.exists(MODEL_PATH):
@@ -166,11 +166,9 @@ def _debug_log(debug: int, level: int, text: str, is_last: bool | None = None):
 
 
 def _fmt_score(x) -> str:
-    if x == float("inf"):
-        return "inf"
-    if x == float("-inf"):
-        return "-inf"
-    return f"{x:.2f}"
+    if x == float("inf"):  return "inf"
+    if x == float("-inf"): return "-inf"
+    return f"{x:.4f}"   # was .2f — use 4 decimal places
 
 def _search_log(msg: str):
     if DEBUG_SEARCH:
@@ -1140,22 +1138,20 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
 
     stand_pat = evaluate(chess_board, root_color)
 
+    DELTA = 9.5
+
     if maximizing:
         if stand_pat >= beta:
-            return beta
-        DELTA = 9.5
+            return stand_pat
         if stand_pat < alpha - DELTA:
-            return alpha
-        if stand_pat > alpha:
-            alpha = stand_pat
+            return stand_pat
+        alpha = max(alpha, stand_pat)
     else:
         if stand_pat <= alpha:
-            return alpha
-        DELTA = 9.5
+            return stand_pat
         if stand_pat > beta + DELTA:
-            return beta
-        if stand_pat < beta:
-            beta = stand_pat
+            return stand_pat
+        beta = min(beta, stand_pat)
 
     if depth == 0:
         return stand_pat
@@ -1184,8 +1180,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
         snap = chess_board._snapshot_state()
         try:
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(WHITE)
-            chess_board._refresh_search_state_for_turn(BLACK)
+            chess_board._refresh_search_state_for_turn(next_turn)
 
             score = _quiescence(chess_board, alpha, beta, root_color, next_turn, depth - 1, deadline)
         except ValueError as e:
@@ -1280,9 +1275,9 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
     # depth-based cap: deeper = narrower, shallower = wider
     if depth >= 4:
-        candidate_cap = min(candidate_cap, 8 if history_len > 10 else 10)
+        candidate_cap = min(candidate_cap, 14 if history_len > 10 else 16)  # was 8/10
     elif depth == 3:
-        candidate_cap = min(candidate_cap, 10 if history_len > 10 else 12)
+        candidate_cap = min(candidate_cap, 16 if history_len > 10 else 18)  # was 10/12
     elif depth == 2:
         candidate_cap = min(candidate_cap, 14)
     else:
@@ -1314,22 +1309,23 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             f"{role} {COLOR[turn]} depth={depth} alpha={_fmt_score(alpha)} beta={_fmt_score(beta)}"
         )
 
-    shown_moves = all_moves
+    shown_count = len(all_moves)
     if debug >= 2 and debug_max_children is not None:
-        shown_moves = all_moves[:debug_max_children]
+        shown_count = min(len(all_moves), debug_max_children)
 
     best = float('-inf') if maximizing else float('inf')
 
-    for idx, (piece, move, order_score) in enumerate(shown_moves):
-        is_last = (idx == len(shown_moves) - 1)
+    for idx, (piece, move, order_score) in enumerate(all_moves):
+        will_show = debug >= 2 and idx < shown_count
+        is_last_shown = will_show and (idx == shown_count - 1)
         from_sq = piece.location
 
-        if debug >= 2:
+        if will_show:
             _debug_log(
                 debug,
                 ply + 1,
                 f"{piece.name} {from_sq}->{move} order={order_score:.2f}",
-                is_last=is_last
+                is_last=is_last_shown
             )
 
         snap = chess_board._snapshot_state()
@@ -1338,15 +1334,14 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             is_forcing = _should_extend(piece, move, chess_board)
 
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(WHITE)
-            chess_board._refresh_search_state_for_turn(BLACK)
+            chess_board._refresh_search_state_for_turn(next_turn)
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
 
             extension = 1 if (depth == 1 and is_forcing) else 0
 
-            if debug >= 2 and extension:
+            if will_show and extension:
                 _debug_log(debug, ply + 2, "forcing extension +1")
 
             score = minimax(
@@ -1363,12 +1358,12 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 deadline=deadline
             )
 
-            if debug >= 2:
+            if will_show:
                 _debug_log(debug, ply + 2, f"result => {_fmt_score(score)}")
 
         except ValueError as e:
             if "kings cannot be captured" in str(e):
-                if debug >= 2:
+                if will_show:
                     _debug_log(debug, ply + 2, "skipped illegal king-capture branch")
                 continue
             raise
@@ -1378,18 +1373,18 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
         if maximizing:
             if score > best:
                 best = score
-                if debug >= 2:
+                if will_show:
                     _debug_log(debug, ply + 2, f"new best MAX => {_fmt_score(best)}")
             alpha = max(alpha, best)
         else:
             if score < best:
                 best = score
-                if debug >= 2:
+                if will_show:
                     _debug_log(debug, ply + 2, f"new best MIN => {_fmt_score(best)}")
             beta = min(beta, best)
 
         if beta <= alpha:
-            if debug >= 2:
+            if will_show:
                 _debug_log(
                     debug,
                     ply + 2,
@@ -1525,8 +1520,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
         try:
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(WHITE)
-            chess_board._refresh_search_state_for_turn(BLACK)
+            chess_board._refresh_search_state_for_turn(next_turn)
 
             # Return mated opponent move immediately
             opp_moves = _search_legal_moves(chess_board, next_turn, repertoire_name=repertoire_name)
@@ -1546,8 +1540,8 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
                 search_depth - 1,
                 next_turn,
                 color,
-                alpha,
-                beta,
+                float('-inf'),   # fresh window per root move
+                float('inf'),
                 repertoire_name=repertoire_name,
                 ply=2,
                 debug=debug,

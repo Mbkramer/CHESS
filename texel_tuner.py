@@ -238,7 +238,7 @@ def calibrate_k(positions: list, params: EvalParams,
 # ── Local Coordinate Descent ──────────────────────────────────────────────────
 
 def tune(positions: list, params: EvalParams,
-         delta: float = 0.01,
+         delta: float = 3,
          max_passes: int = 20,
          save_path: str = "tuned_params.json",
          verbose: bool = True) -> EvalParams:
@@ -264,7 +264,7 @@ def tune(positions: list, params: EvalParams,
         improved = 0
         pass_start = time.time()
 
-        for path, current_val in flat:
+        for param_idx, (path, current_val) in enumerate(flat):
             # Never tune pawn material value — it's the anchor
             if path == ('pawn_value',):
                 continue
@@ -284,11 +284,15 @@ def tune(positions: list, params: EvalParams,
             p_minus = set_param(params, path, current_val - delta)
             mse_minus = compute_mse(positions, p_minus)
 
+            if param_idx % 10 == 0:
+                print(f"  param {param_idx}/{len(flat)}  current MSE: {best_mse:.6f}")
+
             if mse_minus < best_mse:
                 params = p_minus
                 best_mse = mse_minus
                 current_val = current_val - delta
                 improved += 1
+            
 
         pass_time = time.time() - pass_start
         if verbose:
