@@ -68,8 +68,14 @@ class ChessBoard:
             BLACK: Player(BLACK)
         }
 
+        self.attacked_squares = {
+            WHITE: self._build_attack_map(WHITE),
+            BLACK: self._build_attack_map(BLACK),
+        }
+
         self.black_king_location = "e8"
         self.white_king_location = "e1"
+
         self.phase = "EARLY"
 
         self._update_tiles()
@@ -141,31 +147,36 @@ class ChessBoard:
     def _update_tiles(self) -> None:
         self._sync_board()
 
-        # 1. Generate raw moves / attack maps
+        # 1. Generate raw pseudo-legal moves
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)
 
-        # 2. Determine check from raw attack maps
+        # 2. Build attack map from RAW moves
+        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+
+        # 3. Determine check from raw attack map
         checked_status = {}
         for color in COLORS:
             checked_status[color] = self._test_check(color)
 
-        # 3. Now cut illegal executable moves
+        # 4. Cut illegal executable moves
         for color in COLORS:
             self._cut_illegal_moves(color)
 
-        # 4. Rebuild possible move pairs from filtered moves
+        # 5. Rebuild legal move pairs only
         for color in COLORS:
             self.players[color].possible_moves = []
             for piece in self.players[color].pieces:
                 for move in piece.moves:
                     self.players[color].possible_moves.append((piece.location, move))
 
-        # 5. Apply checked / mated flags
+        # 6. Apply checked / mated flags
         for color in COLORS:
             self.players[color].checked = checked_status[color]
             self.players[color].mated = checked_status[color] and len(self.players[color].possible_moves) == 0
+            
 
     def _sync_board(self) -> None:
         # Clear all tiles first
@@ -189,16 +200,14 @@ class ChessBoard:
                 tile.place_piece(piece)
 
     def _fast_update_tiles(self) -> None:
-        """
-        Lightweight tile refresh for PGN replay / training data generation.
-        Skips _cut_illegal_moves and possible_move rebuilding — python-chess
-        already validated every move, so we only need raw move generation
-        for the tensor snapshot and piece location tracking.
-        """
         self._sync_board()
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)
+
+        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+
         for color in COLORS:
             self.players[color].checked = self._test_check(color)
 
@@ -216,6 +225,10 @@ class ChessBoard:
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
+        # build attack map
+        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
 
@@ -227,6 +240,10 @@ class ChessBoard:
         # Raw move generation for both sides is still needed for attack maps/check logic
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
+
+        # build attack map
+        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
 
         # Set checked flags from raw attack maps
         self.players[WHITE].checked = self._test_check(WHITE)
@@ -256,7 +273,6 @@ class ChessBoard:
                     if self._move_is_safe(color, piece, move):
                         legal.append(move)
 
-
                 except ValueError as e:
                     msg = str(e)
                     if "kings cannot be captured" in msg or "cannot move onto own piece" in msg:
@@ -280,10 +296,9 @@ class ChessBoard:
 
         king.check = False
 
-        for opp_piece in self.players[opp_color].pieces:
-            if king_location in opp_piece.moves:
-                king.check = True
-                return True
+        if king_location in self.attacked_squares[opp_color]:
+            king.check = True
+            return True
 
         return False
     
@@ -299,69 +314,108 @@ class ChessBoard:
         return moves_out
     
     def _snapshot_state(self):
-        """Lightweight snapshot — stores only what search moves change."""
         pieces_state = {}
         for color in COLORS:
             for piece in self.players[color].pieces:
                 pieces_state[id(piece)] = (
                     piece.location,
-                    piece.moves,          # list ref — copy below
+                    list(piece.moves),
                     getattr(piece, 'castle', ''),
                     getattr(piece, 'starting_location', None),
                     getattr(piece, 'check', False),
                 )
 
         return {
-            "actions":        self.actions,          # list ref — copy below
-            "pieces_state":   pieces_state,
-            "player_pieces":  {c: list(self.players[c].pieces)  for c in COLORS},
-            "player_points":  {c: self.players[c].points        for c in COLORS},
-            "player_actions": {c: self.players[c].actions       for c in COLORS},
-            "player_taken":   {c: list(self.players[c].taken_pieces) for c in COLORS},
+            "actions": list(self.actions),
+            "pieces_state": pieces_state,
+            "player_pieces": {c: list(self.players[c].pieces) for c in COLORS},
+            "player_points": {c: self.players[c].points for c in COLORS},
+            "player_actions": {c: list(self.players[c].actions) for c in COLORS},
+            "player_taken": {c: list(self.players[c].taken_pieces) for c in COLORS},
             "player_taken_str": {c: self.players[c].taken_pieces_str for c in COLORS},
-            "checked":        {c: self.players[c].checked       for c in COLORS},
-            "mated":          {c: self.players[c].mated         for c in COLORS},
-            "possible_moves": {c: self.players[c].possible_moves for c in COLORS},
+            "checked": {c: self.players[c].checked for c in COLORS},
+            "mated": {c: self.players[c].mated for c in COLORS},
+            "possible_moves": {c: list(self.players[c].possible_moves) for c in COLORS},
+            "attacked_squares": {
+                WHITE: set(self.attacked_squares[WHITE]),
+                BLACK: set(self.attacked_squares[BLACK]),
+            },
+            "white_king_location": self.white_king_location,
+            "black_king_location": self.black_king_location,
         }
 
 
     def _restore_state(self, state):
-        """Restore from lightweight snapshot."""
         for color in COLORS:
             p = self.players[color]
-            p.pieces           = state["player_pieces"][color]
-            p.points           = state["player_points"][color]
-            p.actions          = state["player_actions"][color]
-            p.taken_pieces     = state["player_taken"][color]
+            p.pieces = state["player_pieces"][color]
+            p.points = state["player_points"][color]
+            p.actions = list(state["player_actions"][color])
+            p.taken_pieces = list(state["player_taken"][color])
             p.taken_pieces_str = state["player_taken_str"][color]
-            p.checked          = state["checked"][color]
-            p.mated            = state["mated"][color]
-            p.possible_moves   = state["possible_moves"][color]
+            p.checked = state["checked"][color]
+            p.mated = state["mated"][color]
+            p.possible_moves = list(state["possible_moves"][color])
 
             for piece in p.pieces:
                 ps = state["pieces_state"].get(id(piece))
                 if ps:
-                    piece.location          = ps[0]
-                    piece.moves             = list(ps[1])
-                    piece.castle            = ps[2]
+                    piece.location = ps[0]
+                    piece.moves = list(ps[1])
+                    piece.castle = ps[2]
                     piece.starting_location = ps[3]
-                    piece.check             = ps[4]
+                    piece.check = ps[4]
 
-        self.actions = state["actions"]
+        self.actions = list(state["actions"])
+        self.attacked_squares = {
+            WHITE: set(state["attacked_squares"][WHITE]),
+            BLACK: set(state["attacked_squares"][BLACK]),
+        }
+        self.white_king_location = state["white_king_location"]
+        self.black_king_location = state["black_king_location"]
         self._sync_board()
 
 
     def _move_is_safe(self, color, piece, move) -> bool:
         opp = BLACK if color == WHITE else WHITE
 
-        # Do not simulate moves that land on the enemy king square.
         target_tile = self._get_tile(move)
-
         if target_tile and target_tile.piece:
             if target_tile.piece.name == "K":
                 return False
             if target_tile.piece.color == color:
                 return False
+
+        # Special castling legality:
+        # cannot castle while in check or through check
+        if piece.name == "K":
+            from_sq = piece.location
+            is_castle = (
+                (piece.color == WHITE and from_sq == "e1" and move in ("g1", "c1")) or
+                (piece.color == BLACK and from_sq == "e8" and move in ("g8", "c8"))
+            )
+
+            if is_castle:
+                # build current attack map for the CURRENT position
+                self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+                self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+
+                opp_color = BLACK if color == WHITE else WHITE
+
+                # cannot castle out of check
+                if from_sq in self.attacked_squares[opp_color]:
+                    return False
+
+                transit_sq = {
+                    "g1": "f1",
+                    "c1": "d1",
+                    "g8": "f8",
+                    "c8": "d8",
+                }[move]
+
+                # cannot castle through check
+                if transit_sq in self.attacked_squares[opp_color]:
+                    return False
 
         snap = self._snapshot_state()
 
@@ -372,6 +426,10 @@ class ChessBoard:
             self.players[color].update_moves(self, self.players[opp].actions)
             self.players[opp].update_moves(self, self.players[color].actions)
 
+            self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+            self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+
+            # destination square safety, including castling into check
             return not self._test_check(color)
         finally:
             self._restore_state(snap)
@@ -387,6 +445,9 @@ class ChessBoard:
 
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
+
+        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
+        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
 
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
@@ -496,6 +557,37 @@ class ChessBoard:
             return None
 
         return last_piece
+    
+
+    def _build_attack_map(self, color: str) -> set[str]:
+        attacked = set()
+
+        for piece in self.players[color].pieces:
+            col = ord(piece.location[0])
+            row = int(piece.location[1])
+
+            if piece.name == "P":
+                if color == WHITE:
+                    for dc in (-1, 1):
+                        if 97 <= col + dc <= 104 and row + 1 <= 8:
+                            attacked.add(f"{chr(col + dc)}{row + 1}")
+                else:
+                    for dc in (-1, 1):
+                        if 97 <= col + dc <= 104 and row - 1 >= 1:
+                            attacked.add(f"{chr(col + dc)}{row - 1}")
+            elif piece.name == "K":
+                for dc in (-1, 0, 1):
+                    for dr in (-1, 0, 1):
+                        if dc == 0 and dr == 0:
+                            continue
+                        nc = col + dc
+                        nr = row + dr
+                        if 97 <= nc <= 104 and 1 <= nr <= 8:
+                            attacked.add(f"{chr(nc)}{nr}")
+            else:
+                attacked.update(piece.moves)
+
+        return attacked
 
     # Move piece from one tile to another, updating piece location and board state
     def _move_piece(self, piece: Piece, to_tile_id: str,

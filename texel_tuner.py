@@ -27,15 +27,16 @@ def sigmoid(score: float, K: float = K_FACTOR) -> float:
 
 # ── MSE ───────────────────────────────────────────────────────────────────────
 
-def compute_mse(positions: list, params: EvalParams) -> float:
+def compute_mse(positions: list, params: EvalParams, k: float = K_FACTOR) -> float:
     """
     positions: list of (ChessBoard snapshot, result_float) tuples
     result_float: already normalized to [0,1] where 1.0=white win
     """
+
     total_error = 0.0
     for board, result in positions:
         score = evaluate(board, 'W', p=params)
-        predicted = sigmoid(score)
+        predicted = sigmoid(score, K=k)
         total_error += (predicted - result) ** 2
     return total_error / len(positions)
 
@@ -213,7 +214,7 @@ def load_board_positions(pgn_path: str, max_games: int = 100000,
 # ── K-Factor Calibration ──────────────────────────────────────────────────────
 
 def calibrate_k(positions: list, params: EvalParams,
-                k_range=(0.1, 2.0), steps=20) -> float:
+                k_range=(0.1, 50.0), steps=40) -> float:
     """
     Find the K value that minimizes MSE on your current eval.
     Run this ONCE before tuning — it sets the scale for the sigmoid.
@@ -238,7 +239,7 @@ def calibrate_k(positions: list, params: EvalParams,
 # ── Local Coordinate Descent ──────────────────────────────────────────────────
 
 def tune(positions: list, params: EvalParams,
-         delta: float = 3,
+         delta: float = 0.01,
          max_passes: int = 20,
          save_path: str = "tuned_params.json",
          verbose: bool = True) -> EvalParams:
@@ -382,13 +383,15 @@ if __name__ == "__main__":
         print("No positions loaded. Check your PGN path.")
         exit(1)
 
-    # Calibrate K
-    if args.calibrate_k:
-        K_FACTOR = calibrate_k(positions, params)
-
     # Tune
     print(f"\nTuning {len(get_flat_params(params))} parameters "
           f"over {len(positions)} positions...")
+
+    # Calibrate K
+    if args.calibrate_k:
+        best_k = calibrate_k(positions, params)
+        K_FACTOR = best_k 
+
     tuned = tune(
         positions, params,
         delta=args.delta,

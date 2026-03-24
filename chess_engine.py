@@ -203,7 +203,7 @@ def game_loop(chess_board: ChessBoard, game_input):
 
                 # Cap bot decions making time
                 move_budget = 120 # Generouse 2 minutes
-                depth = 3
+                depth = 2
 
                 # Under a shot clock
                 if game_input[2] != None:
@@ -289,7 +289,7 @@ def game_loop(chess_board: ChessBoard, game_input):
 
                 # Cap bot decions making time
                 move_budget = 120 # Generouse 2 minutes
-                depth = 3
+                depth = 2
 
                 # Under a shot clock
                 if game_input[2] != None:

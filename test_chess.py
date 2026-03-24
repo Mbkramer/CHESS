@@ -53,6 +53,43 @@ def make_move(board, from_sq, to_sq, *, assert_legal=True, assert_consistent=Tru
         locations = [p.location for p in all_pieces]
         assert len(locations) == len(set(locations)), "Duplicate piece locations after move"
 
+def set_position(b, white_pieces, black_pieces):
+    from pieces import King, Queen, Rook, Bishop, Knight, Pawn
+
+    piece_classes = {
+        'K': King,
+        'Q': Queen,
+        'R': Rook,
+        'B': Bishop,
+        'N': Knight,
+        'P': Pawn,
+    }
+
+    for color in (WHITE, BLACK):
+        b.players[color].pieces = []
+        b.players[color].actions = []
+        b.players[color].possible_moves = []
+        b.players[color].taken_pieces = []
+        b.players[color].taken_pieces_str = ""
+        b.players[color].points = 0
+        b.players[color].checked = False
+        b.players[color].mated = False
+
+    b.actions = []
+
+    counters = {
+        WHITE: {'P': 0, 'N': 0, 'B': 0, 'R': 0, 'Q': 0, 'K': 0},
+        BLACK: {'P': 0, 'N': 0, 'B': 0, 'R': 0, 'Q': 0, 'K': 0},
+    }
+
+    for color, pieces in ((WHITE, white_pieces), (BLACK, black_pieces)):
+        for name, square in pieces:
+            i = counters[color][name]
+            piece = piece_classes[name](color, square, i)
+            counters[color][name] += 1
+            b.players[color].pieces.append(piece)
+
+    b._update_tiles()
 
 class ChessTestCase(unittest.TestCase):
     def assertPiece(self, board, square, name=None, color=None):
@@ -455,6 +492,74 @@ class TestCastling(ChessTestCase):
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
         self.assertNotIn('g1', king.moves)
+
+    def test_castling_not_available_while_in_check(self):
+        b = ChessBoard()
+
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('R', 'h1')],
+            black_pieces=[('K', 'a8'), ('R', 'e8')],
+        )
+
+        self.assertIn('e1', b.attacked_squares[BLACK])
+        self.assertTrue(b.players[WHITE].checked)
+
+        king = self.assertPiece(b, 'e1', name='K', color=WHITE)
+        self.assertNotIn('g1', king.moves)
+        self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
+    def test_castling_not_available_through_attacked_f1(self):
+        b = ChessBoard()
+
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('R', 'h1')],
+            black_pieces=[('K', 'a8'), ('R', 'f8')],
+        )
+
+        self.assertIn('f1', b.attacked_squares[BLACK])
+        self.assertNotIn('e1', b.attacked_squares[BLACK])
+        self.assertNotIn('g1', b.attacked_squares[BLACK])
+
+        king = self.assertPiece(b, 'e1', name='K', color=WHITE)
+        self.assertNotIn('g1', king.moves, "White should not be allowed to castle through attacked f1")
+        self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
+    def test_castling_not_available_into_attacked_g1(self):
+        b = ChessBoard()
+
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('R', 'h1')],
+            black_pieces=[('K', 'a8'), ('R', 'g8')],
+        )
+
+        self.assertIn('g1', b.attacked_squares[BLACK])
+        self.assertNotIn('e1', b.attacked_squares[BLACK])
+        self.assertNotIn('f1', b.attacked_squares[BLACK])
+
+        king = self.assertPiece(b, 'e1', name='K', color=WHITE)
+        self.assertNotIn('g1', king.moves, "White should not be allowed to castle into attacked g1")
+        self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
+    def test_castling_available_when_path_is_clear_and_safe(self):
+        b = ChessBoard()
+
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('R', 'h1')],
+            black_pieces=[('K', 'a8')],
+        )
+
+        self.assertFalse(b.players[WHITE].checked)
+        self.assertNotIn('e1', b.attacked_squares[BLACK])
+        self.assertNotIn('f1', b.attacked_squares[BLACK])
+        self.assertNotIn('g1', b.attacked_squares[BLACK])
+
+        king = self.assertPiece(b, 'e1', name='K', color=WHITE)
+        self.assertIn('g1', king.moves)
+        self.assertIn(('e1', 'g1'), b.players[WHITE].possible_moves)
 
 
 class TestEnPassant(ChessTestCase):

@@ -348,6 +348,26 @@ def get_position_bonus(piece, p: EvalParams = None) -> float:
         return 0.0
     return table[_square_index(piece.location, piece.color)]
 
+def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
+    moves = []
+    for from_sq, move in chess_board.players[turn].possible_moves:
+        piece = next(
+            (p for p in chess_board.players[turn].pieces if p.location == from_sq),
+            None
+        )
+        if piece is None:
+            continue
+
+        target_tile = chess_board._get_tile(move)
+        if target_tile and target_tile.piece and target_tile.piece.name == "K":
+            continue
+
+        order_score = move_order_score(
+            chess_board, piece, move, color=turn, repertoire_name=repertoire_name
+        )
+        moves.append((piece, move, order_score))
+    return moves
+
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
 MATE_SCORE = 100000
@@ -528,19 +548,6 @@ def _rook_on_open_file(chess_board, color) -> float:
         elif f not in friendly_pawn_files:
             score += 0.1        # semi-open (no friendly pawn)
     return score
-
-def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
-    moves = []
-    for piece in chess_board.players[turn].pieces:
-        for move in piece.moves:
-            target_tile = chess_board._get_tile(move)
-            if target_tile and target_tile.piece and target_tile.piece.name == "K":
-                continue
-            order_score = move_order_score(
-                chess_board, piece, move, color=turn, repertoire_name=repertoire_name
-            )
-            moves.append((piece, move, order_score))
-    return moves
 
 
 # --- Search depth handling ----------------------------------------------
@@ -1443,20 +1450,26 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
     next_turn = BLACK if color == WHITE else WHITE
     candidate_moves = []
 
-    for piece in chess_board.players[color].pieces:
-        for move in list(piece.moves):
-            target_tile = chess_board._get_tile(move)
-            if target_tile and target_tile.piece and target_tile.piece.name == "K":
-                continue
+    for from_sq, move in list(chess_board.players[color].possible_moves):
+        piece = next(
+            (p for p in chess_board.players[color].pieces if p.location == from_sq),
+            None
+        )
+        if piece is None:
+            continue
 
-            order_score = move_order_score(
-                chess_board,
-                piece,
-                move,
-                color=color,
-                repertoire_name=repertoire_name
-            )
-            candidate_moves.append((piece, move, order_score))
+        target_tile = chess_board._get_tile(move)
+        if target_tile and target_tile.piece and target_tile.piece.name == "K":
+            continue
+
+        order_score = move_order_score(
+            chess_board,
+            piece,
+            move,
+            color=color,
+            repertoire_name=repertoire_name
+        )
+        candidate_moves.append((piece, move, order_score))
 
     # Add search depth for limited move list and reduced piece counts
     num_moves = len(candidate_moves)

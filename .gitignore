@@ -1,10 +1,10 @@
+.gitignore
 venv
-__pycache__/
-check_points/
-data/
+__pycache__
+check_points
+data
 filter_pgn.py
 model.py
 pgn_replay.py
-tensor.py
 train.py
 migrate_checkpoints.py

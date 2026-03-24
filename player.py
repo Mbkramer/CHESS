@@ -22,7 +22,7 @@ class PlayerAction:
         self.from_tile  = from_tile
         self.to_tile    = to_tile
         self.piece_id   = piece.id       
-        self.piece_name = piece.name     
+        self.piece_name = piece.name
         self.captured   = captured.id if captured else None
         self.castle     = castle
         self.promotion  = promotion       

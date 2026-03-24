@@ -473,6 +473,7 @@ class King(Piece):
 
     def set_moves(self, board, opp_actions):
 
+        opp_color = WHITE if self.color == BLACK else BLACK
         self.moves = []
         self.castle = ""
 
@@ -537,9 +538,9 @@ class King(Piece):
                 if spot is None or spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
 
-            # Castling
-            if self.location == self.starting_location and self.check == False:
-                # Kingside: f and g must be empty, rook on h must not have moved
+           # Castling
+            if self.location == self.starting_location:
+                # Kingside
                 if (
                     _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None
                     and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None
@@ -554,7 +555,7 @@ class King(Piece):
                         self.moves.append(f"{chr(ascii_col + 2)}{row}")
                         self.castle += "KS"
 
-                # Queenside: d, c, b must be empty, rook on a must not have moved
+                # Queenside
                 if (
                     ascii_col - 4 >= 97
                     and _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}") is None
