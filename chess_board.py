@@ -249,9 +249,6 @@ class ChessBoard:
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
 
-        # Only legalize the side to move
-        self._cut_illegal_moves(turn)
-
         # Rebuild only side-to-move legal move list
         self.players[turn].possible_moves = []
         for piece in self.players[turn].pieces:

@@ -45,6 +45,14 @@ def _check_tile_occupied_by_opponent(board, tile_id: str, color: str) -> bool:
         and tile.piece.color != color
     )
 
+def _square_attacked_by(board, square: str, by_color: str) -> bool:
+    """Check if `square` is attacked by any piece of `by_color`.
+    Uses already-generated raw moves — call after update_moves."""
+    for piece in board.players[by_color].pieces:
+        if square in piece.moves:
+            return True
+    return False
+
 class Piece:
     def __init__(self, color: str, name: str, value: int, location: str, id: str):
         self.color = color
@@ -538,36 +546,44 @@ class King(Piece):
                 if spot is None or spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
 
-           # Castling
-            if self.location == self.starting_location:
-                # Kingside
+        # Castling
+        if self.location == self.starting_location and self.check == False:
+            opp_color = BLACK if self.color == WHITE else WHITE
+
+            # Kingside
+            if (
+                _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None
+                and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None
+            ):
+                rook = _check_tile_piece(board, f"{chr(ascii_col + 3)}{row}")
                 if (
-                    _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}") is None
-                    and _check_tile_piece(board, f"{chr(ascii_col + 2)}{row}") is None
+                    rook is not None
+                    and rook.name == "R"
+                    and rook.color == self.color
+                    and rook.starting_location is not None
                 ):
-                    rook = _check_tile_piece(board, f"{chr(ascii_col + 3)}{row}")
-                    if (
-                        rook is not None
-                        and rook.name == "R"
-                        and rook.color == self.color
-                        and rook.starting_location is not None
-                    ):
+                    # NEW: also check king doesn't pass through an attacked square
+                    transit_ks = f"{chr(ascii_col + 1)}{row}"
+                    if not _square_attacked_by(board, transit_ks, opp_color):
                         self.moves.append(f"{chr(ascii_col + 2)}{row}")
                         self.castle += "KS"
 
-                # Queenside
+            # Queenside
+            if (
+                ascii_col - 4 >= 97
+                and _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}") is None
+                and _check_tile_piece(board, f"{chr(ascii_col - 2)}{row}") is None
+                and _check_tile_piece(board, f"{chr(ascii_col - 3)}{row}") is None
+            ):
+                rook = _check_tile_piece(board, f"{chr(ascii_col - 4)}{row}")
                 if (
-                    ascii_col - 4 >= 97
-                    and _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}") is None
-                    and _check_tile_piece(board, f"{chr(ascii_col - 2)}{row}") is None
-                    and _check_tile_piece(board, f"{chr(ascii_col - 3)}{row}") is None
+                    rook is not None
+                    and rook.name == "R"
+                    and rook.color == self.color
+                    and rook.starting_location is not None
                 ):
-                    rook = _check_tile_piece(board, f"{chr(ascii_col - 4)}{row}")
-                    if (
-                        rook is not None
-                        and rook.name == "R"
-                        and rook.color == self.color
-                        and rook.starting_location is not None
-                    ):
+                    # NEW: also check king doesn't pass through an attacked square
+                    transit_qs = f"{chr(ascii_col - 1)}{row}"
+                    if not _square_attacked_by(board, transit_qs, opp_color):
                         self.moves.append(f"{chr(ascii_col - 2)}{row}")
                         self.castle += "QS"

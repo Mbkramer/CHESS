@@ -1341,7 +1341,15 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             is_forcing = _should_extend(piece, move, chess_board)
 
             chess_board._move_piece(piece, move, simulate=True)
-            chess_board._refresh_search_state_for_turn(next_turn)
+            
+            # If moving side's king is now in check, this was an illegal move. Skip it.
+            chess_board._sync_board()
+            if chess_board._test_check(turn):   # turn = the side that just moved
+                chess_board._restore_state(snap)
+                continue
+
+            chess_board._refresh_search_state_for_turn(WHITE)
+            chess_board._refresh_search_state_for_turn(BLACK)
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
