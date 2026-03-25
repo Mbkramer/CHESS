@@ -8,3 +8,4 @@ model.py
 pgn_replay.py
 train.py
 migrate_checkpoints.py
+inspect_params.py

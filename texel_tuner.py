@@ -12,7 +12,7 @@ import os, sys, json, math, time, copy, argparse
 sys.path.insert(0, os.path.dirname(__file__))
 
 from chess_board import ChessBoard
-from bot import EvalParams, evaluate, EVAL_PARAMS
+from bot import EvalParams, evaluate, evaluate_fast, EVAL_PARAMS
 from pgn_replay import iter_pgn_data   # ← reuse your existing pipeline
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ def compute_mse(positions: list, params: EvalParams, k: float = K_FACTOR) -> flo
 
     total_error = 0.0
     for board, result in positions:
-        score = evaluate(board, 'W', p=params)
+        score = evaluate_fast(board, p=params)
         predicted = sigmoid(score, K=k)
         total_error += (predicted - result) ** 2
     return total_error / len(positions)
@@ -377,7 +377,6 @@ if __name__ == "__main__":
     else:
         print(f"Loading positions from {args.pgn}...")
         positions = load_board_positions(args.pgn, max_games=args.games, stride=10)
-
 
     if not positions:
         print("No positions loaded. Check your PGN path.")

@@ -2,7 +2,7 @@ import sys
 import time
 import random
 from chess_board import ChessBoard
-from bot import best_move
+from bot import best_move, export_game_to_pgn, MODEL_PATH, MODEL_NAME
 from opening_book import REPERTOIRES, BALANCED, SOLID, AGRESSIVE, TACTICAL
 import copy
 
@@ -87,6 +87,9 @@ def game_loop(chess_board: ChessBoard, game_input):
     running = True
     turn = WHITE
 
+    white_win = 0
+    black_win = 0
+
     white_move_time = 0
     black_move_time = 0
     last_move_times = {
@@ -144,10 +147,12 @@ def game_loop(chess_board: ChessBoard, game_input):
             if game_input[2] != None:
                 if shot_clocks[WHITE] <= 0 or shot_clocks[BLACK] <= 0:
                     running = False
-                    if shot_clocks[WHITE]<=0:
+                    if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                    elif shot_clocks[BLACK]<=0:
+                        black_win += 1
+                    elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
+                        white_win += 1
                     print(f"GAME OVER")
 
             turn = BLACK if turn == WHITE else WHITE
@@ -196,6 +201,10 @@ def game_loop(chess_board: ChessBoard, game_input):
                 if len(chess_board.players[bot_color].possible_moves) == 0:
                     print(f"MATED: {COLORS[bot_color]} has been mated...\n")
                     print("GAME OVER")
+                    if bot_color == WHITE:
+                        black_win += 1
+                    elif bot_color == BLACK:
+                        white_win += 1
                     running = False
                     return
                 
@@ -248,11 +257,12 @@ def game_loop(chess_board: ChessBoard, game_input):
             if game_input[2] != None:
                 if shot_clocks[WHITE] <= 0 or shot_clocks[BLACK] <= 0:
                     running = False
-
-                    if shot_clocks[WHITE]<=0:
+                    if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                    elif shot_clocks[BLACK]<=0:
+                        black_win += 1
+                    elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
+                        white_win += 1
                     print(f"GAME OVER")
             
             turn = BLACK if turn == WHITE else WHITE
@@ -281,6 +291,10 @@ def game_loop(chess_board: ChessBoard, game_input):
                 if len(chess_board.players[turn].possible_moves) == 0:
                     print(f"MATED: {COLORS[turn]} has been mated...\n")
                     print("GAME OVER")
+                    if bot_color == WHITE:
+                        black_win += 1
+                    elif bot_color == BLACK:
+                        white_win += 1
                     running = False
                     return
                 
@@ -394,13 +408,19 @@ def game_loop(chess_board: ChessBoard, game_input):
             if game_input[2] != None:
                 if shot_clocks[WHITE] <= 0 or shot_clocks[BLACK] <= 0:
                     running = False
-
-                    if shot_clocks[WHITE]<=0:
+                    if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                    elif shot_clocks[BLACK]<=0:
+                        black_win += 1
+                    elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
+                        white_win += 1
                     print(f"GAME OVER")
 
+    if game_input[0] == 'bot':
+        export_game_to_pgn(chess_board, output_path=f"data/bot_games/player_vs_{MODEL_NAME}_d{depth}", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
+    elif game_input[0] == '2p':
+        export_game_to_pgn(chess_board, output_path=f"data/bot_games/player_vs_player", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
+    
     print("GAME LOG: ")
     for player_action in chess_board.actions:
         print(player_action)
@@ -479,7 +499,6 @@ def start_game():
 
     if hold == "debug" or "DEBUG":
         game_input.append(hold)
-
 
     print("Game Started!")
     game_loop(chess_board, game_input)

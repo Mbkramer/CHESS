@@ -15,6 +15,7 @@ except Exception:
     board_to_tensor = None
 
 MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v4.pt")
+MODEL_NAME = "pgn_2000_2400_v4"
 
 model = None
 if load_model is not None and os.path.exists(MODEL_PATH):
@@ -83,7 +84,7 @@ except Exception:
     chess = None
 from datetime import datetime
 
-def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
+def export_game_to_pgn(chess_board, output_path: str, model_path: str, result: str = "*"):
     """
     Converts your engine's action log into a valid PGN file
     and saves it under data/bot_games/<model_name>/.
@@ -111,17 +112,18 @@ def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
     node = game
 
     # --- Replay moves ---
-    for action in chess_board.actions:
-
+    for i, action in enumerate(chess_board.actions):
         move_uci = action.from_tile + action.to_tile
-
-        # Handle promotion
         if action.promotion:
             move_uci += action.promotion.lower()
 
         move = chess.Move.from_uci(move_uci)
 
         if move not in board.legal_moves:
+            print(f"\nFailed at action {i}: {action}")
+            print(f"UCI attempted: {move_uci}")
+            print(f"python-chess board:\n{board}")
+            print(f"Legal moves: {list(board.legal_moves)}")
             raise ValueError(f"Illegal move during PGN export: {move_uci}")
 
         board.push(move)
@@ -131,7 +133,7 @@ def export_game_to_pgn(chess_board, model_path: str, result: str = "*"):
     game.headers["Result"] = result
 
     # --- Build output path ---
-    save_dir = os.path.join("data", "bot_games", model_name)
+    save_dir = os.path(output_path)
     os.makedirs(save_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -236,14 +238,14 @@ QUEEN_TABLE = [
 
 # King wants to stay safe and castled in the middlegame
 KING_TABLE = [
-    -0.3, -0.4, -0.4, -0.5, -0.5, -0.4, -0.4, -0.3,
-    -0.3, -0.4, -0.4, -0.5, -0.5, -0.4, -0.4, -0.3,
-    -0.3, -0.4, -0.4, -0.5, -0.5, -0.4, -0.4, -0.3,
-    -0.3, -0.4, -0.4, -0.5, -0.5, -0.4, -0.4, -0.3,
-    -0.2, -0.3, -0.3, -0.4, -0.4, -0.3, -0.3, -0.2,
-    -0.1, -0.2, -0.2, -0.2, -0.2, -0.2, -0.2, -0.1,
-    0.15, 0.20, 0.05, -0.05, -0.05, 0.05, 0.20, 0.15,
-    0.20, 0.35, 0.15, -0.10, -0.10, 0.15, 0.35, 0.20,
+    -0.10,  0.10,  0.20, -0.30, -0.30,  0.20,  0.10, -0.10,  
+     0.15,  0.20,  0.05, -0.05, -0.05,  0.05,  0.20,  0.15, 
+    -0.10, -0.20, -0.20, -0.20, -0.20, -0.20, -0.20, -0.10,  
+    -0.20, -0.30, -0.30, -0.40, -0.40, -0.30, -0.30, -0.20, 
+    -0.30, -0.40, -0.40, -0.50, -0.50, -0.40, -0.40, -0.30,  
+    -0.30, -0.40, -0.40, -0.50, -0.50, -0.40, -0.40, -0.30,  
+    -0.30, -0.40, -0.40, -0.50, -0.50, -0.40, -0.40, -0.30, 
+    -0.30, -0.40, -0.40, -0.50, -0.50, -0.40, -0.40, -0.30, 
 ]
 
 PIECE_TABLES = {
@@ -277,7 +279,7 @@ class EvalParams:
     # ── Pawn structure ──
     doubled_pawn_penalty:   float = 0.30
     isolated_pawn_penalty:  float = 0.35
-    connected_pawn_bonus:   float = 0.10
+    connected_pawn_bonus:   float = 0.15
     passed_pawn_base:       float = 0.15
     passed_pawn_advance:    float = 0.10
 
@@ -409,18 +411,18 @@ def _pawn_structure(chess_board, color) -> float:
         right_file = COLUMNS[col_idx + 1] if col_idx < 7 else None
         has_neighbor = (left_file  in my_files) or (right_file in my_files)
         if not has_neighbor:
-            score -= 0.35
+            score -= EVAL_PARAMS.isolated_pawn_penalty
 
         # ── Connected pawn bonus ──────────────────────────────────────────
         # A pawn is "connected" if a friendly pawn guards it (diagonally adjacent)
         if left_file and left_file in my_files:
             left_pawns = [p for p in my_pawns if p.location[0] == left_file]
             if any(abs(int(p.location[1]) - row) == 1 for p in left_pawns):
-                score += 0.1
+                score += EVAL_PARAMS.connected_pawn_bonus
         if right_file and right_file in my_files:
             right_pawns = [p for p in my_pawns if p.location[0] == right_file]
             if any(abs(int(p.location[1]) - row) == 1 for p in right_pawns):
-                score += 0.1
+                score += EVAL_PARAMS.connected_pawn_bonus
 
         # ── Passed pawn bonus ─────────────────────────────────────────────
         # No opposing pawns on the same or adjacent files ahead of this pawn
@@ -434,7 +436,7 @@ def _pawn_structure(chess_board, color) -> float:
         if is_passed:
             # Bonus scales with how far advanced the pawn is
             advancement = (row - 1) if color == WHITE else (8 - row)
-            score += 0.15 + 0.1 * advancement
+            score += EVAL_PARAMS.passed_pawn_base + EVAL_PARAMS.passed_pawn_advance * advancement
 
     return score
 
@@ -468,15 +470,22 @@ def _king_safety(chess_board, color) -> float:
     # ── Castled Structure Bonus───────────────────────────────────────────────────────
 
     # Board has a castle structure
-    row = 1 if color == WHITE else 8
+    phase = game_phase(chess_board)
 
-    piece = chess_board._get_tile(f"d{row}").piece
-    if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"c{row}":
-        score += .75
-
-    piece = chess_board._get_tile(f"f{row}").piece
-    if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"g{row}":
-        score += .75
+    if phase != LATE:
+        row = 1 if color == WHITE else 8
+        piece = chess_board._get_tile(f"d{row}").piece
+        if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"c{row}":
+            score += .75
+        piece = chess_board._get_tile(f"f{row}").piece
+        if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"g{row}":
+            score += .75
+    else:
+        # Endgame: reward king centralization
+        king_col_idx = COLUMNS.index(king.location[0])
+        king_row_idx = ROWS.index(king.location[1])
+        center_dist = max(abs(king_col_idx - 3.5), abs(king_row_idx - 3.5))
+        score += max(0.0, 0.6 - 0.15 * center_dist)
 
 
     # ── Pawn shield ───────────────────────────────────────────────────────
@@ -762,19 +771,19 @@ def evaluate(chess_board, color, p=None) -> float:
     model_scaled = model_score * 5
 
     # Clamp model influence (important)
-    model_scaled = max(min(model_scaled, 3), -3)
+    model_scaled = max(min(model_scaled, 5), -5) # from 3, -3
 
     # Phase weights — model is strongest early (trained on human openings, suppresses
     # positional blunders), tapers as game becomes tactical (classical eval more reliable).
     # Also use ply count for a sharper early-game boost independent of piece count.
     ply_count = len(getattr(chess_board, "actions", []))
     if ply_count <= 10:
-        # Deep opening: model has strongest signal, classical can misread piece activity
-        model_weight = 0.35
+        # Deep opening: model has strongest signal, classical can misread piece activity (added .1 to all)
+        model_weight = 0.45
     elif phase == EARLY:
-        model_weight = 0.25
+        model_weight = 0.35
     elif phase == MIDDLE:
-        model_weight = 0.15
+        model_weight = 0.25
     else:  # LATE
         model_weight = 0.08
 
@@ -783,6 +792,19 @@ def evaluate(chess_board, color, p=None) -> float:
     score = model_weight * model_scaled + classical_weight * classical
 
     return score if color == WHITE else -score
+
+
+def evaluate_fast(chess_board, p=None) -> float:
+    """Lightweight eval for Texel tuning — material + PST only."""
+    if p is None:
+        p = EVAL_PARAMS
+    score = 0.0
+    for piece in chess_board.players[WHITE].pieces:
+        score += _piece_value(piece.name, p) + get_position_bonus(piece, p)
+    for piece in chess_board.players[BLACK].pieces:
+        score -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
+    return score
+
 
 # ── Minimax with Alpha-Beta Pruning ───────────────────────────────────────────
 # alpha = best score the maximizing player is guaranteed so far
@@ -1609,6 +1631,13 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 Run x number of self play games and print outcomes
 """
 
+def _catch_loop(last_piece_move_counts, piece):
+
+    
+
+    return last_piece_move_counts
+
+
 def main():
     from chess_board import ChessBoard
     import time
@@ -1643,42 +1672,69 @@ def main():
             phase = "EARLY"
             print(f"GAME PHASE: {phase}")
 
-            while running:
+            white_last_piece_moves = 0
+            black_last_piece_moves = 0
 
-                if len(chess_board.players[turn].possible_moves) == 0:
-                    if chess_board.players[turn].checked:
-                        running = False
-                        game_end_time = time.time()
-                        if turn != WHITE:
-                            white_win = 1
-                            black_win = 0
-                            white_wins+=1
-                        elif turn == WHITE:
-                            white_win = 0
-                            black_win = 1
-                            black_wins+=1
-                    else:
+            try:
+                while running:
+
+                    if len(chess_board.players[turn].possible_moves) == 0:
+                        if chess_board.players[turn].checked:
+                            running = False
+                            game_end_time = time.time()
+                            if turn != WHITE:
+                                white_win = 1
+                                black_win = 0
+                            elif turn == WHITE:
+                                white_win = 0
+                                black_win = 1
+                        else:
+                            running = False
+                            game_end_time = time.time()
+                            white_win = 1/2
+                            black_win = 1/2
+                    elif black_last_piece_moves >= 10 or white_last_piece_moves >= 10:
                         running = False
                         game_end_time = time.time()
                         white_win = 1/2
                         black_win = 1/2
 
-                else:
-                    move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=120)
-                    if move:
-                        from_sq, to_sq = move
-                        piece = next(p for p in chess_board.players[turn].pieces 
-                                    if p.location == from_sq)
-                        chess_board._move_piece(piece, to_sq)
-                        chess_board._update_tiles()
-                        print(chess_board.actions[-1])
-                        if chess_board.actions[-1].captured != None:
-                            current_phase = game_phase(chess_board)
-                            if phase != current_phase:
-                                phase = current_phase
-                                print(f"GAME PHASE: {phase}")
+                    else:
+                        move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=120)
 
-                turn = BLACK if turn == WHITE else WHITE
+                        if move is None:
+                            # Treat this as a terminal/search failure instead of silently skipping the turn
+                            print(f"ERROR: best_move returned None for {COLOR[turn]}")
+                            running = False
+                            game_end_time = time.time()
+
+                        if move:
+                            from_sq, to_sq = move
+                            piece = next(p for p in chess_board.players[turn].pieces 
+                                        if p.location == from_sq)
+                            chess_board._move_piece(piece, to_sq)
+                            chess_board._update_tiles()
+                            print(chess_board.actions[-1])
+
+                            if len(chess_board.actions) > 40:
+                                if chess_board.players[turn].actions[-1].piece_id == chess_board.players[turn].actions[-2].piece_id:
+                                    if turn == WHITE:
+                                        white_last_piece_moves += 1
+                                    elif turn == BLACK:
+                                        black_last_piece_moves += 1
+
+                            if chess_board.actions[-1].captured != None:
+                                current_phase = game_phase(chess_board)
+                                if phase != current_phase:
+                                    phase = current_phase
+                                    print(f"GAME PHASE: {phase}")
+
+                    turn = BLACK if turn == WHITE else WHITE
+
+            except Exception as game_err:
+                print(f"[ERROR] Game {game} crashed during play: {game_err}")
+                game_end_time = game_end_time or time.time()
+                continue
 
             game_time = fmt_time(game_end_time - game_start_time)
             num_moves = len(chess_board.actions)
@@ -1693,10 +1749,14 @@ def main():
                     num_promo+=1
             total_promotions+=num_promo
 
+            if white_win != 1/2:
+                white_wins += white_win
+                black_wins += black_win
+
             print(f"GAME {game} COMPLETE, {COLOR[turn]} WINS: TIME: {game_time}  NUMBER OF MOVES: {num_moves}  NUMBER OF CASTLES: {num_castles}  NUMBER OF PROMOTIONS: {num_promo}")
 
             # Load PGN
-            path = export_game_to_pgn(chess_board, model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
+            path = export_game_to_pgn(chess_board, output_path=f"data/bot_games/{MODEL_NAME}/{depth}", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
             print(f"Saved PGN to: {path}")
 
 
