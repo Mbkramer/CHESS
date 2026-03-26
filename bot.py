@@ -374,7 +374,6 @@ def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
 
 MATE_SCORE = 100000
 
-
 def _pawn_structure(chess_board, color) -> float:
     """
     Returns a score (from color's perspective) for pawn structure.
@@ -771,7 +770,7 @@ def evaluate(chess_board, color, p=None) -> float:
     model_scaled = model_score * 5
 
     # Clamp model influence (important)
-    model_scaled = max(min(model_scaled, 5), -5) # from 3, -3
+    model_scaled = max(min(model_scaled, 4), -4) # from 3, -3
 
     # Phase weights — model is strongest early (trained on human openings, suppresses
     # positional blunders), tapers as game becomes tactical (classical eval more reliable).
@@ -785,7 +784,7 @@ def evaluate(chess_board, color, p=None) -> float:
     elif phase == MIDDLE:
         model_weight = 0.25
     else:  # LATE
-        model_weight = 0.08
+        model_weight = 0.15
 
     classical_weight = 1 - model_weight
 
