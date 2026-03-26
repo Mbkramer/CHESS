@@ -3,7 +3,7 @@ import copy
 
 from chess_board import ChessBoard
 from player import PlayerAction
-from bot import best_move
+from bot import best_move, minimax
 from bot import move_order_score, _passes_opening_sanity
 from opening_book import choose_book_move
 
@@ -23,6 +23,12 @@ def moves_for(board, square):
     piece = get_piece(board, square)
     assert piece is not None, f"No piece at {square}"
     return list(piece.moves)
+
+
+def play(board, from_sq, to_sq, *, simulate=False):
+    piece = board._get_tile(from_sq).piece
+    assert piece is not None, f"No piece at {from_sq}"
+    board._move_piece(piece, to_sq, simulate=simulate)
 
 
 def make_move(board, from_sq, to_sq, *, assert_legal=True, assert_consistent=True):
@@ -103,6 +109,20 @@ class ChessTestCase(unittest.TestCase):
 
     def assertEmpty(self, board, square):
         self.assertIsNone(get_piece(board, square), f"Expected empty square {square}")
+
+    def assertSquareAttacked(self, board, square, by_color):
+        self.assertGreater(
+            board.pressure_map[by_color].get(square, 0),
+            0,
+            f"Expected {square} to be attacked by {by_color}",
+        )
+
+    def assertSquareNotAttacked(self, board, square, by_color):
+        self.assertEqual(
+            board.pressure_map[by_color].get(square, 0),
+            0,
+            f"Expected {square} not to be attacked by {by_color}",
+        )
 
     def assert_board_consistent(self, board):
         # Exactly one king per side
@@ -502,13 +522,12 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'e8')],
         )
 
-        self.assertGreater(b.pressure_map[BLACK].get('e1', 0), 0)
+        self.assertSquareAttacked(b, 'e1', BLACK)
         self.assertTrue(b.players[WHITE].checked)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
         self.assertNotIn('g1', king.moves)
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
-
 
     def test_castling_not_available_through_attacked_f1(self):
         b = ChessBoard()
@@ -519,14 +538,13 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'f8')],
         )
 
-        self.assertGreater(b.pressure_map[BLACK].get('f1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('g1', 0), 0)
+        self.assertSquareAttacked(b, 'f1', BLACK)
+        self.assertSquareNotAttacked(b, 'e1', BLACK)
+        self.assertSquareNotAttacked(b, 'g1', BLACK)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
-        self.assertNotIn('g1', king.moves)
+        self.assertNotIn('g1', king.moves, "White should not be allowed to castle through attacked f1")
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
-
 
     def test_castling_not_available_into_attacked_g1(self):
         b = ChessBoard()
@@ -537,14 +555,13 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'g8')],
         )
 
-        self.assertGreater(b.pressure_map[BLACK].get('g1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('f1', 0), 0)
+        self.assertSquareAttacked(b, 'g1', BLACK)
+        self.assertSquareNotAttacked(b, 'e1', BLACK)
+        self.assertSquareNotAttacked(b, 'f1', BLACK)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
-        self.assertNotIn('g1', king.moves)
+        self.assertNotIn('g1', king.moves, "White should not be allowed to castle into attacked g1")
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
-
 
     def test_castling_available_when_path_is_clear_and_safe(self):
         b = ChessBoard()
@@ -556,9 +573,9 @@ class TestCastling(ChessTestCase):
         )
 
         self.assertFalse(b.players[WHITE].checked)
-        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('f1', 0), 0)
-        self.assertEqual(b.pressure_map[BLACK].get('g1', 0), 0)
+        self.assertSquareNotAttacked(b, 'e1', BLACK)
+        self.assertSquareNotAttacked(b, 'f1', BLACK)
+        self.assertSquareNotAttacked(b, 'g1', BLACK)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
         self.assertIn('g1', king.moves)
@@ -684,6 +701,126 @@ class TestBot(ChessTestCase):
         piece = next(p for p in b.players[WHITE].pieces if p.location == from_sq)
         b._move_piece(piece, to_sq)
         b._update_tiles()
+        self.assertFalse(b._test_check(WHITE))
+        self.assert_board_consistent(b)
+
+
+class TestSnapshotRestoreIntegrity(ChessTestCase):
+    def test_pressure_map_restores_as_dict(self):
+        b = ChessBoard()
+        make_move(b, 'e2', 'e4')
+        snap = b._snapshot_state()
+        make_move(b, 'd7', 'd5')
+        b._restore_state(snap)
+
+        self.assertIsInstance(b.pressure_map[WHITE], dict)
+        self.assertIsInstance(b.pressure_map[BLACK], dict)
+        self.assertIn('e4', b.pressure_map[WHITE])
+        self.assert_board_consistent(b)
+
+    def test_repeated_snapshot_restore_preserves_live_moves(self):
+        b = ChessBoard()
+        for from_sq, to_sq in [('e2', 'e4'), ('e7', 'e5'), ('g1', 'f3'), ('b8', 'c6')]:
+            make_move(b, from_sq, to_sq)
+
+        baseline_white = set(b.players[WHITE].possible_moves)
+        baseline_black = set(b.players[BLACK].possible_moves)
+
+        for _ in range(8):
+            snap = b._snapshot_state()
+            try:
+                play(b, 'f1', 'b5', simulate=True)
+                b._refresh_search_state_for_turn(BLACK)
+            finally:
+                b._restore_state(snap)
+
+        self.assertEqual(baseline_white, set(b.players[WHITE].possible_moves))
+        self.assertEqual(baseline_black, set(b.players[BLACK].possible_moves))
+        self.assert_board_consistent(b)
+
+
+class TestSearchIntegrity(ChessTestCase):
+    def test_best_move_returns_live_legal_move(self):
+        b = ChessBoard()
+        for from_sq, to_sq in [
+            ('e2', 'e4'),
+            ('e7', 'e5'),
+            ('g1', 'f3'),
+            ('b8', 'c6'),
+            ('f1', 'b5'),
+            ('a7', 'a6'),
+            ('b5', 'a4'),
+            ('g8', 'f6'),
+        ]:
+            make_move(b, from_sq, to_sq)
+
+        move = best_move(b, WHITE, depth=2, use_opening_book=False)
+        self.assertIsNotNone(move)
+        self.assertIn(move, b.players[WHITE].possible_moves)
+
+    def test_search_candidates_are_executable(self):
+        b = ChessBoard()
+        for from_sq, to_sq in [('d2', 'd4'), ('d7', 'd5'), ('c2', 'c4'), ('e7', 'e6')]:
+            make_move(b, from_sq, to_sq)
+
+        bad = []
+        for from_sq, to_sq in list(b.players[WHITE].possible_moves):
+            snap = b._snapshot_state()
+            try:
+                piece = b._get_tile(from_sq).piece
+                if piece is None:
+                    bad.append(((from_sq, to_sq), 'no piece on from-square'))
+                    continue
+                try:
+                    b._move_piece(piece, to_sq, simulate=True)
+                except ValueError as e:
+                    bad.append(((from_sq, to_sq), str(e)))
+            finally:
+                b._restore_state(snap)
+
+        self.assertEqual([], bad, f'Non-executable moves found in possible_moves: {bad}')
+
+    def test_minimax_does_not_mutate_board_state(self):
+        b = ChessBoard()
+        for from_sq, to_sq in [('d2', 'd4'), ('d7', 'd5'), ('c2', 'c4'), ('e7', 'e6')]:
+            make_move(b, from_sq, to_sq)
+
+        baseline_positions = {
+            p.id: p.location
+            for color in [WHITE, BLACK]
+            for p in b.players[color].pieces
+        }
+        baseline_white = set(b.players[WHITE].possible_moves)
+        baseline_black = set(b.players[BLACK].possible_moves)
+
+        try:
+            _ = minimax(b, depth=2, turn=WHITE, root_color=WHITE)
+        except Exception as e:
+            self.fail(f'minimax raised unexpectedly on a legal position: {e}')
+
+        final_positions = {
+            p.id: p.location
+            for color in [WHITE, BLACK]
+            for p in b.players[color].pieces
+        }
+
+        self.assertEqual(baseline_positions, final_positions)
+        self.assertEqual(baseline_white, set(b.players[WHITE].possible_moves))
+        self.assertEqual(baseline_black, set(b.players[BLACK].possible_moves))
+        self.assert_board_consistent(b)
+
+
+class TestBotExecutionSafety(ChessTestCase):
+    def test_bot_move_executes_without_self_check(self):
+        b = ChessBoard()
+        move = best_move(b, WHITE, depth=2, use_opening_book=False)
+        self.assertIsNotNone(move)
+        self.assertIn(move, b.players[WHITE].possible_moves)
+
+        from_sq, to_sq = move
+        play(b, from_sq, to_sq)
+        b._update_tiles()
+
         self.assertFalse(b._test_check(WHITE))
         self.assert_board_consistent(b)
 
