@@ -502,12 +502,13 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'e8')],
         )
 
-        self.assertIn('e1', b.attacked_squares[BLACK])
+        self.assertGreater(b.pressure_map[BLACK].get('e1', 0), 0)
         self.assertTrue(b.players[WHITE].checked)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
         self.assertNotIn('g1', king.moves)
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
 
     def test_castling_not_available_through_attacked_f1(self):
         b = ChessBoard()
@@ -518,13 +519,14 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'f8')],
         )
 
-        self.assertIn('f1', b.attacked_squares[BLACK])
-        self.assertNotIn('e1', b.attacked_squares[BLACK])
-        self.assertNotIn('g1', b.attacked_squares[BLACK])
+        self.assertGreater(b.pressure_map[BLACK].get('f1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('g1', 0), 0)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
-        self.assertNotIn('g1', king.moves, "White should not be allowed to castle through attacked f1")
+        self.assertNotIn('g1', king.moves)
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
 
     def test_castling_not_available_into_attacked_g1(self):
         b = ChessBoard()
@@ -535,13 +537,14 @@ class TestCastling(ChessTestCase):
             black_pieces=[('K', 'a8'), ('R', 'g8')],
         )
 
-        self.assertIn('g1', b.attacked_squares[BLACK])
-        self.assertNotIn('e1', b.attacked_squares[BLACK])
-        self.assertNotIn('f1', b.attacked_squares[BLACK])
+        self.assertGreater(b.pressure_map[BLACK].get('g1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('f1', 0), 0)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
-        self.assertNotIn('g1', king.moves, "White should not be allowed to castle into attacked g1")
+        self.assertNotIn('g1', king.moves)
         self.assertNotIn(('e1', 'g1'), b.players[WHITE].possible_moves)
+
 
     def test_castling_available_when_path_is_clear_and_safe(self):
         b = ChessBoard()
@@ -553,9 +556,9 @@ class TestCastling(ChessTestCase):
         )
 
         self.assertFalse(b.players[WHITE].checked)
-        self.assertNotIn('e1', b.attacked_squares[BLACK])
-        self.assertNotIn('f1', b.attacked_squares[BLACK])
-        self.assertNotIn('g1', b.attacked_squares[BLACK])
+        self.assertEqual(b.pressure_map[BLACK].get('e1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('f1', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('g1', 0), 0)
 
         king = self.assertPiece(b, 'e1', name='K', color=WHITE)
         self.assertIn('g1', king.moves)

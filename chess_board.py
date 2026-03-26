@@ -68,9 +68,9 @@ class ChessBoard:
             BLACK: Player(BLACK)
         }
 
-        self.attacked_squares = {
-            WHITE: self._build_attack_map(WHITE),
-            BLACK: self._build_attack_map(BLACK),
+        self.pressure_map = {
+            WHITE: self._build_pressure_map(WHITE),
+            BLACK: self._build_pressure_map(BLACK),
         }
 
         self.black_king_location = "e8"
@@ -143,6 +143,9 @@ class ChessBoard:
         tile = self._get_tile(tile_id)
         return tile._is_occupied() if tile else False
     
+    # search opponent's pressure map for a pressure at location
+    def _is_square_attacked(self, location: str, opp_color: str) -> bool:
+        return self.pressure_map[opp_color].get(location, 0) > 0
 
     def _update_tiles(self) -> None:
         self._sync_board()
@@ -153,8 +156,8 @@ class ChessBoard:
             self.players[color].update_moves(self, self.players[opp].actions)
 
         # 2. Build attack map from RAW moves
-        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
         # 3. Determine check from raw attack map
         checked_status = {}
@@ -205,8 +208,8 @@ class ChessBoard:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)
 
-        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
         for color in COLORS:
             self.players[color].checked = self._test_check(color)
@@ -226,8 +229,8 @@ class ChessBoard:
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
         # build attack map
-        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
@@ -242,8 +245,8 @@ class ChessBoard:
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
         # build attack map
-        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
         # Set checked flags from raw attack maps
         self.players[WHITE].checked = self._test_check(WHITE)
@@ -293,7 +296,7 @@ class ChessBoard:
 
         king.check = False
 
-        if king_location in self.attacked_squares[opp_color]:
+        if self.pressure_map[opp_color].get(king_location, 0) > 0:
             king.check = True
             return True
 
@@ -333,9 +336,9 @@ class ChessBoard:
             "checked": {c: self.players[c].checked for c in COLORS},
             "mated": {c: self.players[c].mated for c in COLORS},
             "possible_moves": {c: list(self.players[c].possible_moves) for c in COLORS},
-            "attacked_squares": {
-                WHITE: set(self.attacked_squares[WHITE]),
-                BLACK: set(self.attacked_squares[BLACK]),
+            "pressure_maps": {
+                WHITE: dict(self.pressure_map[WHITE]),
+                BLACK: dict(self.pressure_map[BLACK]),
             },
             "white_king_location": self.white_king_location,
             "black_king_location": self.black_king_location,
@@ -364,9 +367,9 @@ class ChessBoard:
                     piece.check = ps[4]
 
         self.actions = list(state["actions"])
-        self.attacked_squares = {
-            WHITE: set(state["attacked_squares"][WHITE]),
-            BLACK: set(state["attacked_squares"][BLACK]),
+        self.pressure_map = {
+            WHITE: dict(state["pressure_maps"][WHITE]),
+            BLACK: dict(state["pressure_maps"][BLACK]),
         }
         self.white_king_location = state["white_king_location"]
         self.black_king_location = state["black_king_location"]
@@ -394,13 +397,13 @@ class ChessBoard:
 
             if is_castle:
                 # build current attack map for the CURRENT position
-                self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-                self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+                self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+                self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
                 opp_color = BLACK if color == WHITE else WHITE
 
                 # cannot castle out of check
-                if from_sq in self.attacked_squares[opp_color]:
+                if self.pressure_map[opp_color].get(from_sq, 0) > 0:
                     return False
 
                 transit_sq = {
@@ -411,7 +414,7 @@ class ChessBoard:
                 }[move]
 
                 # cannot castle through check
-                if transit_sq in self.attacked_squares[opp_color]:
+                if self.pressure_map[opp_color].get(transit_sq, 0) > 0:
                     return False
 
         snap = self._snapshot_state()
@@ -423,8 +426,8 @@ class ChessBoard:
             self.players[color].update_moves(self, self.players[opp].actions)
             self.players[opp].update_moves(self, self.players[color].actions)
 
-            self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-            self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+            self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+            self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
             # destination square safety, including castling into check
             return not self._test_check(color)
@@ -443,8 +446,8 @@ class ChessBoard:
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
-        self.attacked_squares[WHITE] = self._build_attack_map(WHITE)
-        self.attacked_squares[BLACK] = self._build_attack_map(BLACK)
+        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
@@ -556,8 +559,13 @@ class ChessBoard:
         return last_piece
     
 
-    def _build_attack_map(self, color: str) -> set[str]:
-        attacked = set()
+    def _build_pressure_map(self, color: str) -> dict[str, int]:
+        # Initialize all 64 squares to 0 pressure
+        pressure = {
+            f"{col}{row}": 0
+            for row in ROWS
+            for col in COLUMNS
+        }
 
         for piece in self.players[color].pieces:
             col = ord(piece.location[0])
@@ -566,12 +574,17 @@ class ChessBoard:
             if piece.name == "P":
                 if color == WHITE:
                     for dc in (-1, 1):
-                        if 97 <= col + dc <= 104 and row + 1 <= 8:
-                            attacked.add(f"{chr(col + dc)}{row + 1}")
+                        nc = col + dc
+                        nr = row + 1
+                        if 97 <= nc <= 104 and 1 <= nr <= 8:
+                            pressure[f"{chr(nc)}{nr}"] += 1
                 else:
                     for dc in (-1, 1):
-                        if 97 <= col + dc <= 104 and row - 1 >= 1:
-                            attacked.add(f"{chr(col + dc)}{row - 1}")
+                        nc = col + dc
+                        nr = row - 1
+                        if 97 <= nc <= 104 and 1 <= nr <= 8:
+                            pressure[f"{chr(nc)}{nr}"] += 1
+
             elif piece.name == "K":
                 for dc in (-1, 0, 1):
                     for dr in (-1, 0, 1):
@@ -580,11 +593,13 @@ class ChessBoard:
                         nc = col + dc
                         nr = row + dr
                         if 97 <= nc <= 104 and 1 <= nr <= 8:
-                            attacked.add(f"{chr(nc)}{nr}")
-            else:
-                attacked.update(piece.moves)
+                            pressure[f"{chr(nc)}{nr}"] += 1
 
-        return attacked
+            else:
+                for sq in piece.moves:
+                    pressure[sq] += 1
+
+        return pressure
 
     # Move piece from one tile to another, updating piece location and board state
     def _move_piece(self, piece: Piece, to_tile_id: str,

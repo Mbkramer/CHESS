@@ -84,22 +84,14 @@ except Exception:
     chess = None
 from datetime import datetime
 
+
 def export_game_to_pgn(chess_board, output_path: str, model_path: str, result: str = "*"):
-    """
-    Converts your engine's action log into a valid PGN file
-    and saves it under data/bot_games/<model_name>/.
-
-    result:
-        "1-0", "0-1", "1/2-1/2", or "*"
-    """
-
     if chess is None:
         raise RuntimeError("python-chess is required for PGN export")
 
     board = chess.Board()
     game = chess.pgn.Game()
 
-    # --- Headers ---
     model_name = os.path.basename(model_path).replace(".pt", "")
 
     game.headers["Event"] = "Bot Self-Play"
@@ -111,7 +103,6 @@ def export_game_to_pgn(chess_board, output_path: str, model_path: str, result: s
 
     node = game
 
-    # --- Replay moves ---
     for i, action in enumerate(chess_board.actions):
         move_uci = action.from_tile + action.to_tile
         if action.promotion:
@@ -129,18 +120,13 @@ def export_game_to_pgn(chess_board, output_path: str, model_path: str, result: s
         board.push(move)
         node = node.add_variation(move)
 
-    # --- Final result ---
-    game.headers["Result"] = result
-
-    # --- Build output path ---
-    save_dir = os.path(output_path)
+    save_dir = output_path
     os.makedirs(save_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"game_{timestamp}.pgn"
     filepath = os.path.join(save_dir, filename)
 
-    # --- Write PGN ---
     with open(filepath, "w", encoding="utf-8") as f:
         exporter = chess.pgn.FileExporter(f)
         game.accept(exporter)
@@ -279,7 +265,7 @@ class EvalParams:
     # ── Pawn structure ──
     doubled_pawn_penalty:   float = 0.30
     isolated_pawn_penalty:  float = 0.35
-    connected_pawn_bonus:   float = 0.15
+    connected_pawn_bonus:   float = 0.12
     passed_pawn_base:       float = 0.15
     passed_pawn_advance:    float = 0.10
 
@@ -299,8 +285,8 @@ class EvalParams:
     rook_semi_open_bonus:    float = 0.10
 
     # ── Hanging pieces ──
-    hanging_outnumbered_weight: float = 0.18
-    hanging_undefended_weight:  float = 0.10
+    hanging_outnumbered_weight: float = 0.5
+    hanging_undefended_weight:  float = 0.25
 
 # Global instance — used by evaluate() at runtime
 EVAL_PARAMS = EvalParams()
@@ -454,6 +440,7 @@ def _king_safety(chess_board, color) -> float:
       - Pawn shield in front of the king (+)
       - Open/semi-open files near the king (-)
       - Enemy piece proximity to the king (-)
+      - Pressure opp attacks proximity to king (-)
     """
     opponent = BLACK if color == WHITE else WHITE
     king_pieces = [p for p in chess_board.players[color].pieces if p.name == 'K']
@@ -527,6 +514,30 @@ def _king_safety(chess_board, color) -> float:
         if dist <= 2:
             score -= 0.15 * PIECE_VALUES[piece.name] / 5.0
 
+    # ── Attack proximity ──────────────────────────────────────────────────
+    king_file_idx = COLUMNS.index(king.location[0])
+    king_rank = int(king.location[1])
+    
+    for dr in range(-2, 3):
+        for df in range(-2, 3):
+            if df == 0 and dr == 0:
+                continue
+
+            file_idx = king_file_idx + df
+            rank = king_rank + dr
+
+            if not (0 <= file_idx < 8 and 1 <= rank <= 8):
+                continue
+
+            sq = f"{COLUMNS[file_idx]}{rank}"
+
+            if chess_board._is_square_attacked(sq, opponent):
+                # Heavier penalty for immediate ring
+                if max(abs(df), abs(dr)) == 1:
+                    score -= 0.12
+                else:
+                    score -= 0.05
+            
     return score
 
 
@@ -561,19 +572,9 @@ def _rook_on_open_file(chess_board, color) -> float:
 # --- Search depth handling ----------------------------------------------
 
 def _square_pressure(board, square: str, color: str) -> tuple[int, int]:
-    """Return (attackers, defenders) for `color` pieces if moved to `square`."""
     opp = BLACK if color == WHITE else WHITE
-    attackers = 0
-    defenders = 0
-
-    for piece in board.players[opp].pieces:
-        if square in piece.moves:
-            attackers += 1
-
-    for piece in board.players[color].pieces:
-        if square in piece.moves:
-            defenders += 1
-
+    attackers = board.pressure_map[opp].get(square, 0)
+    defenders = board.pressure_map[color].get(square, 0)
     return attackers, defenders
 
 def _should_extend(piece, move, chess_board):
@@ -639,9 +640,9 @@ def _hanging_pieces(chess_board, color: str) -> float:
 
         piece_weight = PIECE_VALUES[piece.name]
         if attackers > defenders:
-            score -= 0.18 * piece_weight
+            score -= EVAL_PARAMS.hanging_outnumbered_weight * piece_weight
         elif defenders == 0:
-            score -= 0.1 * piece_weight
+            score -= EVAL_PARAMS.hanging_undefended_weight * piece_weight
     return score
 
 
@@ -707,22 +708,16 @@ def _development_score(chess_board, color: str) -> float:
 # --- Evaluatations -----------------------------------------------------------
 
 def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, repertoire_name="balanced"):
-    # Don't score moves — just count them
-    has_moves = any(
-        True
-        for piece in chess_board.players[turn].pieces
-        for move in piece.moves
-        if not (chess_board._get_tile(move) and
-                chess_board._get_tile(move).piece and
-                chess_board._get_tile(move).piece.name == "K")
-    )
+    legal_moves = chess_board.players[turn].possible_moves
     in_check = chess_board.players[turn].checked
 
-    if not has_moves:
+    if len(legal_moves) == 0:
         if in_check:
             return -MATE_SCORE + depth if turn == root_color else MATE_SCORE - depth
         return 0.0
+
     return None
+
 
 def evaluate(chess_board, color, p=None) -> float:
 
@@ -764,13 +759,10 @@ def evaluate(chess_board, color, p=None) -> float:
     classical -= _development_score(chess_board, BLACK)
 
     # Phase Signals
-
     phase = game_phase(chess_board)
-
     model_scaled = model_score * 5
-
     # Clamp model influence (important)
-    model_scaled = max(min(model_scaled, 4), -4) # from 3, -3
+    model_scaled = max(min(model_scaled, 3), -3)
 
     # Phase weights — model is strongest early (trained on human openings, suppresses
     # positional blunders), tapers as game becomes tactical (classical eval more reliable).
@@ -778,13 +770,13 @@ def evaluate(chess_board, color, p=None) -> float:
     ply_count = len(getattr(chess_board, "actions", []))
     if ply_count <= 10:
         # Deep opening: model has strongest signal, classical can misread piece activity (added .1 to all)
-        model_weight = 0.45
-    elif phase == EARLY:
         model_weight = 0.35
-    elif phase == MIDDLE:
+    elif phase == EARLY:
         model_weight = 0.25
-    else:  # LATE
+    elif phase == MIDDLE:
         model_weight = 0.15
+    else:  # LATE
+        model_weight = 0.1
 
     classical_weight = 1 - model_weight
 
@@ -1063,12 +1055,14 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         victim_val = PIECE_VALUES[victim.name]
 
         # Stronger separation than your current formula
-        score += 2 * victim_val - attacker_val
+        score += 3 * victim_val - attacker_val
 
-        # Prefer clearly favorable captures even more
+        # Prefer clearly favorable captures
         if victim_val > attacker_val:
             score += 3.0
         elif victim_val == attacker_val:
+            score += 2.0
+        elif victim_val < attacker_val:
             score += 1.0
 
     # 2. Promotions
@@ -1077,8 +1071,8 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         score += 20.0
 
     # 3. Checks 
-    if _could_plausibly_give_check(board, piece, move):
-        score+=4
+    if _move_gives_check(board, piece, move):
+        score += 2.0
 
     # 4. If castle available prioritize
     if piece.color == WHITE and piece.name == "K":
@@ -1674,6 +1668,9 @@ def main():
             white_last_piece_moves = 0
             black_last_piece_moves = 0
 
+            white_win = "1/2"
+            black_win = "1/2"
+
             try:
                 while running:
 
@@ -1682,21 +1679,21 @@ def main():
                             running = False
                             game_end_time = time.time()
                             if turn != WHITE:
-                                white_win = 1
-                                black_win = 0
+                                white_win = "1"
+                                black_win = "0"
                             elif turn == WHITE:
-                                white_win = 0
-                                black_win = 1
+                                white_win = "0"
+                                black_win = "1"
                         else:
                             running = False
                             game_end_time = time.time()
-                            white_win = 1/2
-                            black_win = 1/2
+                            white_win = "1/2"
+                            black_win = "1/2"
                     elif black_last_piece_moves >= 10 or white_last_piece_moves >= 10:
                         running = False
                         game_end_time = time.time()
-                        white_win = 1/2
-                        black_win = 1/2
+                        white_win = "1/2"
+                        black_win = "1/2"
 
                     else:
                         move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=120)
@@ -1748,9 +1745,11 @@ def main():
                     num_promo+=1
             total_promotions+=num_promo
 
-            if white_win != 1/2:
-                white_wins += white_win
-                black_wins += black_win
+            if white_win != "1/2":
+                if white_win == "1":
+                    white_wins += 1
+                elif white_win == "0":
+                    black_wins += 1
 
             print(f"GAME {game} COMPLETE, {COLOR[turn]} WINS: TIME: {game_time}  NUMBER OF MOVES: {num_moves}  NUMBER OF CASTLES: {num_castles}  NUMBER OF PROMOTIONS: {num_promo}")
 
@@ -1766,8 +1765,10 @@ def main():
 
         print(f"{games} GAMES EVAL COMPLETE, {COLOR[turn]}  WINS:  WHITE: {white_wins}  BLACK{black_wins}  TIME: {total_time}  AVG GAME TIME {avg_time}  NUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  NUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
     
+    except ValueError as e:
+        print(f"Input parse failed:\n{e}")
     except Exception as e:
-        print(f"NOT INT FAILE TO GENERATE GAMES:\n{e}")
+        print(f"Game generation failed:\n{e}")
 
 if __name__ == '__main__':
     main()
