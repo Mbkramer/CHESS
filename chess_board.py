@@ -235,24 +235,33 @@ class ChessBoard:
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
 
+
     def _refresh_search_state_for_turn(self, turn: str) -> None:
         opp = BLACK if turn == WHITE else WHITE
 
         self._sync_board()
 
-        # Raw move generation for both sides is still needed for attack maps/check logic
+        # Clear stale search flags before regenerating
+        self.players[WHITE].checked = False
+        self.players[BLACK].checked = False
+        self.players[WHITE].possible_moves = []
+        self.players[BLACK].possible_moves = []
+
+        # Generate raw moves
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
-        # build attack map
+        # Rebuild pressure maps
         self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
         self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
-        # Set checked flags from raw attack maps
+        # Set check flags from current position
         self.players[WHITE].checked = self._test_check(WHITE)
         self.players[BLACK].checked = self._test_check(BLACK)
 
-        # Rebuild only side-to-move legal move list
+        # Legalize ONLY side to move
+        self._cut_illegal_moves(turn)
+
         self.players[turn].possible_moves = []
         for piece in self.players[turn].pieces:
             for move in piece.moves:
@@ -262,6 +271,7 @@ class ChessBoard:
             self.players[turn].checked and
             len(self.players[turn].possible_moves) == 0
         )
+
 
     # Remove any move that leaves own king in check.
     def _cut_illegal_moves(self, color) -> None:
@@ -313,6 +323,7 @@ class ChessBoard:
 
         return moves_out
     
+
     def _snapshot_state(self):
         pieces_state = {}
         for color in COLORS:
@@ -320,9 +331,9 @@ class ChessBoard:
                 pieces_state[id(piece)] = (
                     piece.location,
                     list(piece.moves),
-                    getattr(piece, 'castle', ''),
-                    getattr(piece, 'starting_location', None),
-                    getattr(piece, 'check', False),
+                    getattr(piece, "castle", ""),
+                    getattr(piece, "starting_location", None),
+                    getattr(piece, "check", False),
                 )
 
         return {

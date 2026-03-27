@@ -14,8 +14,8 @@ except Exception:
     load_model = None
     board_to_tensor = None
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v4.pt")
-MODEL_NAME = "pgn_2000_2400_v4"
+MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v5.pt")
+MODEL_NAME = "pgn_2000_2400_v5.pt"
 
 model = None
 if load_model is not None and os.path.exists(MODEL_PATH):
@@ -31,7 +31,6 @@ WHITE = 'W'
 BLACK = 'B'
 
 COLOR = {"W": "White", "B": "Black"}
-
 
 MAX_BOOK_PLIES = 12
 
@@ -1363,8 +1362,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 chess_board._restore_state(snap)
                 continue
 
-            chess_board._refresh_search_state_for_turn(WHITE)
-            chess_board._refresh_search_state_for_turn(BLACK)
+            chess_board._refresh_search_state_for_turn(next_turn)
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
@@ -1608,6 +1606,10 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
         alpha = max(alpha, best_score)
 
+    if chosen is not None:
+        if chosen not in set(chess_board.players[color].possible_moves):
+            raise ValueError(f"best_move selected stale/illegal move: {chosen}")
+
     if chosen is not None and debug >= 1:
         chosen_piece = chess_board._get_tile(chosen[0]).piece
         piece_name = chosen_piece.name if chosen_piece else "?"
@@ -1748,7 +1750,7 @@ def main():
             if white_win != "1/2":
                 if white_win == "1":
                     white_wins += 1
-                elif white_win == "0":
+                if black_win == "1":
                     black_wins += 1
 
             print(f"GAME {game} COMPLETE, {COLOR[turn]} WINS: TIME: {game_time}  NUMBER OF MOVES: {num_moves}  NUMBER OF CASTLES: {num_castles}  NUMBER OF PROMOTIONS: {num_promo}")
@@ -1763,7 +1765,7 @@ def main():
         avg_time = fmt_time((end_time - start_time)/games)
         avg_num_moves = avg_num_moves/games
 
-        print(f"{games} GAMES EVAL COMPLETE, {COLOR[turn]}  WINS:  WHITE: {white_wins}  BLACK{black_wins}  TIME: {total_time}  AVG GAME TIME {avg_time}  NUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  NUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
+        print(f"{games} GAME EVAL COMPLETE\nWINS:  WHITE: {white_wins}  BLACK: {black_wins}  \nTIME: {total_time}  AVG GAME TIME {avg_time}  \nNUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  \nNUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
     
     except ValueError as e:
         print(f"Input parse failed:\n{e}")

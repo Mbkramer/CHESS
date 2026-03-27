@@ -291,9 +291,9 @@ def game_loop(chess_board: ChessBoard, game_input):
                 if len(chess_board.players[turn].possible_moves) == 0:
                     print(f"MATED: {COLORS[turn]} has been mated...\n")
                     print("GAME OVER")
-                    if bot_color == WHITE:
+                    if COLORS[turn] == WHITE:
                         black_win += 1
-                    elif bot_color == BLACK:
+                    elif COLORS[turn] == BLACK:
                         white_win += 1
                     running = False
                     return
