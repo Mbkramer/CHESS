@@ -313,9 +313,9 @@ def _square_index(location: str, color: str) -> int:
     col = COLUMNS.index(location[0])
     row = ROWS.index(location[1])
     if color == WHITE:
-        return row * 8 + col        # rank 1 row=0 → index 0..7
+        return (7 - row) * 8 + col       
     else:
-        return (7 - row) * 8 + col  # rank 8 row=7 → index 0..7 (mirrored)
+        return row * 8 + col    # rank 8 row=7 → index 0..7 (mirrored)
 
 
 # In get_position_bonus, pass params:
@@ -638,10 +638,11 @@ def _hanging_pieces(chess_board, color: str) -> float:
             continue
 
         piece_weight = PIECE_VALUES[piece.name]
-        if attackers > defenders:
-            score -= EVAL_PARAMS.hanging_outnumbered_weight * piece_weight
-        elif defenders == 0:
+        if defenders == 0:
             score -= EVAL_PARAMS.hanging_undefended_weight * piece_weight
+        elif attackers > defenders:
+            score -= EVAL_PARAMS.hanging_outnumbered_weight * piece_weight
+            
     return score
 
 
@@ -732,7 +733,6 @@ def evaluate(chess_board, color, p=None) -> float:
 
     classical = 0.0
     for piece in chess_board.players[WHITE].pieces:
-        # Fixed — passes p through so tuner candidate params are actually used:
         classical += _piece_value(piece.name, p) + get_position_bonus(piece, p)
     for piece in chess_board.players[BLACK].pieces:
         classical -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
@@ -769,9 +769,9 @@ def evaluate(chess_board, color, p=None) -> float:
     ply_count = len(getattr(chess_board, "actions", []))
     if ply_count <= 10:
         # Deep opening: model has strongest signal, classical can misread piece activity (added .1 to all)
-        model_weight = 0.35
+        model_weight = 0.3
     elif phase == EARLY:
-        model_weight = 0.25
+        model_weight = 0.2
     elif phase == MIDDLE:
         model_weight = 0.15
     else:  # LATE
@@ -902,7 +902,7 @@ def _early_opening_safety_bonus(board, piece, move) -> float:
 def _is_quiet_backtrack(board, piece, move: str) -> bool:
     """
     Penalize a side moving the same piece straight back to the square
-    it came from on its previous turn.
+    it came from on its previous turn. 
 
     Example:
       White: Bc3 -> d2
@@ -1043,46 +1043,142 @@ def _passes_opening_sanity(board, piece, move: str) -> bool:
 
     return True
 
+def _piece_table(piece, p=None):
+    if p is None:
+        p = EVAL_PARAMS
+    return {
+        'P': p.pawn_table,
+        'N': p.knight_table,
+        'B': p.bishop_table,
+        'R': p.rook_table,
+        'Q': p.queen_table,
+        'K': p.king_table,
+    }.get(piece.name)
+
+
+def _pst_delta_for_move(piece, move: str) -> float:
+    """
+    Cheap quiet-move piece-improvement proxy:
+    bonus = PST(after) - PST(before)
+    """
+    before = get_position_bonus(piece)
+    idx = _square_index(move, piece.color)
+
+    if piece.name == 'P':
+        after = EVAL_PARAMS.pawn_table[idx]
+    elif piece.name == 'N':
+        after = EVAL_PARAMS.knight_table[idx]
+    elif piece.name == 'B':
+        after = EVAL_PARAMS.bishop_table[idx]
+    elif piece.name == 'R':
+        after = EVAL_PARAMS.rook_table[idx]
+    elif piece.name == 'Q':
+        after = EVAL_PARAMS.queen_table[idx]
+    elif piece.name == 'K':
+        after = EVAL_PARAMS.king_table[idx]
+    else:
+        after = 0.0
+
+    return after - before
+
+def _piece_placement_headroom(piece, p=None) -> float:
+    """
+    How much theoretical PST upside this piece still has from its current square.
+    Higher = more poorly placed relative to its best known squares.
+    """
+    if p is None:
+        p = EVAL_PARAMS
+
+    table = _piece_table(piece, p)
+    if table is None:
+        return 0.0
+
+    cur = table[_square_index(piece.location, piece.color)]
+    return max(table) - cur
+
+
+def _is_worst_placed_piece(piece, own_pieces, p=None, slack: float = 0.05) -> bool:
+    """
+    True if this piece is among the worst-placed friendly pieces by PST headroom.
+    """
+    if p is None:
+        p = EVAL_PARAMS
+
+    my_headroom = _piece_placement_headroom(piece, p)
+    worst_headroom = max(
+        _piece_placement_headroom(other, p)
+        for other in own_pieces
+        if other.name != 'K'
+    )
+    return my_headroom >= worst_headroom - slack
+
+
 def move_order_score(board, piece, move, color=None, repertoire_name="balanced"):
     score = 0.0
+
+    # Always define this first
     target_tile = board._get_tile(move)
 
+    is_capture = (
+        target_tile is not None and
+        target_tile.piece is not None and
+        target_tile.piece.color != piece.color
+    )
+    is_quiet = not is_capture
+
     # 1. Captures: strong MVV-LVA
-    if target_tile and target_tile.piece and target_tile.piece.color != piece.color:
-        victim = target_tile.piece
-        attacker_val = PIECE_VALUES[piece.name]
-        victim_val = PIECE_VALUES[victim.name]
+    if is_capture:
+        snap = board._snapshot_state()
+        try:
+            board._move_piece(piece, move, simulate=True)
+            board._sync_board()
 
-        # Stronger separation than your current formula
-        score += 3 * victim_val - attacker_val
+            mover = piece.color
+            opp = BLACK if mover == WHITE else WHITE
 
-        # Prefer clearly favorable captures
-        if victim_val > attacker_val:
-            score += 3.0
-        elif victim_val == attacker_val:
-            score += 2.0
-        elif victim_val < attacker_val:
-            score += 1.0
+            # Regenerate raw attacks for the simulated position
+            board.players[mover].update_moves(board, board.players[opp].actions)
+            board.players[opp].update_moves(board, board.players[mover].actions)
+            board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
+            board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
+
+            see = _see(board, move, mover)
+
+            if see < 0:
+                # Losing capture, push it down hard
+                score -= 6.0 + 1.00 * abs(see)
+            elif see == 0:
+                # Trade works out evenly
+                score += 0.75
+            else:
+                # Good capture, especially if tactically clean
+                score += 1.50 + 0.35 * min(see, 5)
+
+        finally:
+            board._restore_state(snap)
 
     # 2. Promotions
-    if piece.name == 'P' and ((piece.color == WHITE and move[1] == '8') or
-                              (piece.color == BLACK and move[1] == '1')):
-        score += 20.0
+    if piece.name == 'P' and (
+        (piece.color == WHITE and move[1] == '8') or
+        (piece.color == BLACK and move[1] == '1')
+    ):
+        score += 7.0
 
-    # 3. Checks 
-    if _move_gives_check(board, piece, move):
-        score += 2.0
+    # 3. Checks
+    if _could_plausibly_give_check(board, piece, move):
+        score += 0.8
 
-    # 4. If castle available prioritize
+    # 4. Castling
     if piece.color == WHITE and piece.name == "K":
-        if piece.location == piece.starting_location and (move == "c1" or move == "g1"):
-            score += 10.0
+        if piece.location == "e1" and move in ("c1", "g1"):
+            score += 5.0
     elif piece.color == BLACK and piece.name == "K":
-        if piece.location == piece.starting_location and (move == "c8" or move == "g8"):
-            score += 10.0
+        if piece.location == "e8" and move in ("c8", "g8"):
+            score += 5.0
+
+    history_len = len(getattr(board, "actions", []))
 
     # 5. Center / development only early
-    history_len = len(getattr(board, "actions", []))
     if history_len <= 12:
         center_bonus = {
             'd4': 0.8, 'e4': 0.8, 'd5': 0.8, 'e5': 0.8,
@@ -1092,6 +1188,16 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         }
         score += center_bonus.get(move, 0.0)
         score += _early_opening_safety_bonus(board, piece, move)
+
+    # 5.5 Lightweight piece-location improvement bonus
+    pst_delta = _pst_delta_for_move(piece, move)
+
+    pst_delta = _pst_delta_for_move(piece, move)
+    if pst_delta > 0:
+        score += 1.0 * pst_delta
+
+        if _is_worst_placed_piece(piece, board.players[piece.color].pieces):
+            score += 0.15
 
     # 6. Book bonus only when relevant
     if color is not None and history_len <= 16:
@@ -1105,43 +1211,49 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     if _is_quiet_backtrack(board, piece, move):
         score -= 0.30
 
-    # 8. SEE-based safety signal.
-    # For quiet moves: simulate placing the piece on the target square and
-    # run a one-recapture Static Exchange Evaluation.  A clearly losing
-    # exchange gets a heavy penalty; a safe square gets a small bonus.
-    # For captures: MVV-LVA already handles ordering, but penalise losing
-    # captures (e.g. NxQ where the queen is defended) to push them below
-    # safe moves.
-    piece_val = PIECE_VALUES[piece.name]
-    is_quiet = not (target_tile and target_tile.piece and target_tile.piece.color != piece.color)
-
+    # 8. Quiet move ordering
     if is_quiet:
         snap = board._snapshot_state()
         try:
             board._move_piece(piece, move, simulate=True)
             board._sync_board()
-            see_score = _see(board, move, piece.color)
-        except Exception:
-            see_score = 0.0
+
+            mover = piece.color
+            opp = BLACK if mover == WHITE else WHITE
+
+            # Regenerate raw attacks for the simulated position
+            board.players[mover].update_moves(board, board.players[opp].actions)
+            board.players[opp].update_moves(board, board.players[mover].actions)
+            board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
+            board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
+
+            see = _see(board, move, mover)
+
+            if see < 0:
+                # Quiet move lands on a tactically losing square
+                score -= 5.0 + 0.75 * abs(see)
+            elif see == 0:
+                # Neutral square, small reward
+                score += 0.20
+            else:
+                # Safe square with favorable recapture structure
+                score += 0.50 + 0.25 * min(see, 3)
+
         finally:
             board._restore_state(snap)
 
-        if see_score < -0.5:
-            # Losing material for free — strong penalty scaled by loss magnitude
-            score -= 3.0 + abs(see_score)
-        elif see_score == 0.0:
-            # Neutral exchange — small escape bonus if piece was already under attack
-            from_attackers, from_defenders = _square_pressure(board, piece.location, piece.color)
-            if from_attackers > from_defenders:
-                score += 0.4
-    else:
-        # Capture: penalise if we're losing the exchange (e.g. BxN where N is defended by P)
+    # 9. Penalize clearly losing captures
+    if is_capture:
+        piece_val = PIECE_VALUES[piece.name]
         victim_val = PIECE_VALUES[target_tile.piece.name]
         if piece_val > victim_val:
             to_attackers, to_defenders = _square_pressure(board, move, piece.color)
-            if to_attackers > 0:
-                # We're capturing with a more valuable piece into a defended square
+            if to_attackers > to_defenders:
                 score -= 1.5 * (piece_val - victim_val)
+
+    # 10. Don't bring queen out too early unless strong move
+    if history_len < 10 and piece.name == 'Q':
+        score -= 0.5
 
     return score
 
@@ -1272,6 +1384,8 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
     for piece in chess_board.players[turn].pieces:
         for move in piece.moves:
             target_tile = chess_board._get_tile(move)
+            if target_tile and target_tile.piece and target_tile.piece.color == piece.color:
+                continue
             if target_tile and target_tile.piece and target_tile.piece.name == "K":
                 continue
 
@@ -1335,6 +1449,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
         shown_count = min(len(all_moves), debug_max_children)
 
     best = float('-inf') if maximizing else float('inf')
+    found_legal_child = False
 
     for idx, (piece, move, order_score) in enumerate(all_moves):
         will_show = debug >= 2 and idx < shown_count
@@ -1386,6 +1501,8 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 deadline=deadline
             )
 
+            found_legal_child = True
+
             if will_show:
                 _debug_log(debug, ply + 2, f"result => {_fmt_score(score)}")
 
@@ -1422,6 +1539,11 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
     if debug >= 2:
         _debug_log(debug, ply, f"{role} {COLOR[turn]} returns {_fmt_score(best)}")
+
+    if not found_legal_child:
+        if chess_board.players[turn].checked:
+            return float('-inf') if turn == root_color else float('inf')
+        return 0.0
 
     return best
 
@@ -1480,6 +1602,11 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
             continue
 
         target_tile = chess_board._get_tile(move)
+
+        # Reject stale same-color move immediately
+        if target_tile and target_tile.piece and target_tile.piece.color == piece.color:
+            continue
+
         if target_tile and target_tile.piece and target_tile.piece.name == "K":
             continue
 
@@ -1490,6 +1617,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
             color=color,
             repertoire_name=repertoire_name
         )
+
         candidate_moves.append((piece, move, order_score))
 
     # Add search depth for limited move list and reduced piece counts
@@ -1516,6 +1644,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         root_tactical,
         approx_king_safety_gap,
     )
+
     root_cap = 18
     if chess_board.players[color].checked:
         root_cap = 22

@@ -266,6 +266,19 @@ class ChessBoard:
         for piece in self.players[turn].pieces:
             for move in piece.moves:
                 self.players[turn].possible_moves.append((piece.location, move))
+                
+                # debug
+                tile = self._get_tile(move)
+                if tile and tile.piece and tile.piece.color == piece.color:
+                    print("BAD SEARCH STATE")
+                    print("turn =", turn)
+                    print("piece =", piece, "at", piece.location)
+                    print("move =", move)
+                    print("occupant =", tile.piece, "at", tile.id)
+                    print("piece.moves =", piece.moves)
+                    raise ValueError(
+                        f"Illegal same-color move survived pruning: {piece} {piece.location}->{move} onto {tile.piece}"
+                    )
 
         self.players[turn].mated = (
             self.players[turn].checked and

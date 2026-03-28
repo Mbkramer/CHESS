@@ -67,21 +67,11 @@ class Player:
 
 
     def update_moves(self, chess_board, opp_actions) -> None:
-        # Always regenerate raw moves first
+        # Generate raw pseudo-legal moves only
         for piece in self.pieces:
             piece.set_moves(chess_board, opp_actions)
 
-        # If in check, possible_moves must be a list of (from_location, to_location) pairs
-        if self.checked:
-            valid_pairs = set(self.possible_moves)
-
-            for piece in self.pieces:
-                piece.moves = [
-                    move for move in piece.moves
-                    if (piece.location, move) in valid_pairs
-                ]
-
-        # Rebuild aggregate possible_moves from the current per-piece move lists
+        # Rebuild aggregate move list from raw per-piece moves
         self.possible_moves = []
         for piece in self.pieces:
             for move in piece.moves:
