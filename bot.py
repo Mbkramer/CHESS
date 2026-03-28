@@ -1164,16 +1164,17 @@ def _piece_placement_headroom(piece, p=None) -> float:
 def _is_worst_placed_piece(piece, own_pieces, p=None, slack: float = 0.05) -> bool:
     """
     True if this piece is among the worst-placed friendly pieces by PST headroom.
+    Safe when only the king remains.
     """
     if p is None:
         p = EVAL_PARAMS
 
+    non_king_pieces = [other for other in own_pieces if other.name != 'K']
+    if not non_king_pieces:
+        return False
+
     my_headroom = _piece_placement_headroom(piece, p)
-    worst_headroom = max(
-        _piece_placement_headroom(other, p)
-        for other in own_pieces
-        if other.name != 'K'
-    )
+    worst_headroom = max(_piece_placement_headroom(other, p) for other in non_king_pieces)
     return my_headroom >= worst_headroom - slack
 
 
@@ -1256,11 +1257,8 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 5.5 Lightweight piece-location improvement bonus
     pst_delta = _pst_delta_for_move(piece, move)
-
-    pst_delta = _pst_delta_for_move(piece, move)
-    if pst_delta > 0:
+    if piece.name != "K" and pst_delta > 0:
         score += 1.0 * pst_delta
-
         if _is_worst_placed_piece(piece, board.players[piece.color].pieces):
             score += 0.15
 
@@ -1945,7 +1943,7 @@ def main():
                             game_end_time = time.time()
                             white_win = "1/2"
                             black_win = "1/2"
-                    elif black_last_piece_moves >= 10 or white_last_piece_moves >= 10:
+                    elif black_last_piece_moves >= 20 or white_last_piece_moves >= 20:
                         running = False
                         game_end_time = time.time()
                         white_win = "1/2"

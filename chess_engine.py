@@ -87,8 +87,8 @@ def game_loop(chess_board: ChessBoard, game_input):
     running = True
     turn = WHITE
 
-    white_win = 0
-    black_win = 0
+    white_win = "1/2"
+    black_win = "1/2"
 
     white_move_time = 0
     black_move_time = 0
@@ -149,10 +149,12 @@ def game_loop(chess_board: ChessBoard, game_input):
                     running = False
                     if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                        black_win += 1
+                        black_win = "1"
+                        white_win = "0"
                     elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
-                        white_win += 1
+                        white_win = "1"
+                        black_win = "0"
                     print(f"GAME OVER")
 
             turn = BLACK if turn == WHITE else WHITE
@@ -197,14 +199,15 @@ def game_loop(chess_board: ChessBoard, game_input):
 
             # Bot Turn
             else:
-
                 if len(chess_board.players[bot_color].possible_moves) == 0:
                     print(f"MATED: {COLORS[bot_color]} has been mated...\n")
                     print("GAME OVER")
                     if bot_color == WHITE:
-                        black_win += 1
+                        black_win = "1"
+                        white_win = "0"
                     elif bot_color == BLACK:
-                        white_win += 1
+                        white_win = "1"
+                        black_win = "0"
                     running = False
                     return
                 
@@ -259,10 +262,12 @@ def game_loop(chess_board: ChessBoard, game_input):
                     running = False
                     if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                        black_win += 1
+                        black_win = "1"
+                        white_win = "0"
                     elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
-                        white_win += 1
+                        white_win = "1"
+                        black_win = "0"
                     print(f"GAME OVER")
             
             turn = BLACK if turn == WHITE else WHITE
@@ -292,9 +297,11 @@ def game_loop(chess_board: ChessBoard, game_input):
                     print(f"MATED: {COLORS[turn]} has been mated...\n")
                     print("GAME OVER")
                     if COLORS[turn] == WHITE:
-                        black_win += 1
+                        black_win = "1"
+                        white_win = "0"
                     elif COLORS[turn] == BLACK:
-                        white_win += 1
+                        white_win = "1"
+                        black_win = "0"
                     running = False
                     return
                 
@@ -410,10 +417,12 @@ def game_loop(chess_board: ChessBoard, game_input):
                     running = False
                     if shot_clocks[WHITE] <= 0:
                         print(f"White is out of time. \nWHITE SHOT CLOCK: {fmt_time(shot_clocks[WHITE])}")
-                        black_win += 1
+                        black_win = "1"
+                        white_win = "0"
                     elif shot_clocks[BLACK] <= 0:
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
-                        white_win += 1
+                        white_win = "1"
+                        black_win = "0"
                     print(f"GAME OVER")
 
     if game_input[0] == 'bot':
