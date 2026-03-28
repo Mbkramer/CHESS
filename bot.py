@@ -287,6 +287,11 @@ class EvalParams:
     hanging_outnumbered_weight: float = 0.5
     hanging_undefended_weight:  float = 0.25
 
+    # -- Backtrack penalties --
+    backtrack_penalty_light: float = 1.0
+    backtrack_penalty_strong: float = 2.0
+
+
 # Global instance — used by evaluate() at runtime
 EVAL_PARAMS = EvalParams()
 
@@ -461,10 +466,10 @@ def _king_safety(chess_board, color) -> float:
         row = 1 if color == WHITE else 8
         piece = chess_board._get_tile(f"d{row}").piece
         if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"c{row}":
-            score += .75
+            score += EVAL_PARAMS.castle_bonus
         piece = chess_board._get_tile(f"f{row}").piece
         if piece is not None and piece.name == 'R' and piece.color == color and king.location == f"g{row}":
-            score += .75
+            score += EVAL_PARAMS.castle_bonus
     else:
         # Endgame: reward king centralization
         king_col_idx = COLUMNS.index(king.location[0])
@@ -488,7 +493,7 @@ def _king_safety(chess_board, color) -> float:
     for f in shield_files:
         sq = f + str(shield_row)
         if 1 <= shield_row <= 8 and sq in friendly_pawns:
-            score += 0.15
+            score += EVAL_PARAMS.pawn_shield_bonus
 
     # ── Open file penalty ─────────────────────────────────────────────────
     all_pawn_files = {
@@ -499,9 +504,9 @@ def _king_safety(chess_board, color) -> float:
     }
     for f in shield_files:
         if f not in all_pawn_files:          # fully open file near king
-            score -= 0.25
+            score -= EVAL_PARAMS.open_file_penalty
         elif f not in {p.location[0] for p in chess_board.players[color].pieces if p.name == 'P'}:
-            score -= 0.1                     # semi-open (opponent pawn only)
+            score -= EVAL_PARAMS.semi_open_file_penalty                    # semi-open (opponent pawn only)
 
     # ── Enemy attacker proximity ──────────────────────────────────────────
     for piece in chess_board.players[opponent].pieces:
@@ -511,7 +516,7 @@ def _king_safety(chess_board, color) -> float:
         opp_row = int(piece.location[1])
         dist = max(abs(opp_col - king_col_idx), abs(opp_row - king_row))
         if dist <= 2:
-            score -= 0.15 * PIECE_VALUES[piece.name] / 5.0
+            score -= EVAL_PARAMS.attacker_proximity_weight * PIECE_VALUES[piece.name] / 5.0
 
     # ── Attack proximity ──────────────────────────────────────────────────
     king_file_idx = COLUMNS.index(king.location[0])
@@ -646,6 +651,51 @@ def _hanging_pieces(chess_board, color: str) -> float:
     return score
 
 
+def _repetition_penalty(chess_board, color) -> float:
+    """
+    Penalize clearly noise-driven repetition: same piece oscillating between
+    two squares with no captures, checks, or pawn advances in between.
+    Light deterrent only — should not punish legitimate retreats.
+    """
+    actions = chess_board.players[color].actions
+    if len(actions) < 2:
+        return 0.0
+
+    def _is_meaningful(action) -> bool:
+        """A move is meaningful if it captured, was a pawn move, or involved a castle."""
+        return (
+            getattr(action, 'captured', None) is not None
+            or getattr(action, 'castle', None) is not None
+            or getattr(action, 'piece_name', '') == 'P'
+        )
+
+    penalty = 0.0
+
+    # --- Pattern 1: A->B then B->A with nothing meaningful in between ---
+    if len(actions) >= 2:
+        a_prev = actions[-2]
+        a_last = actions[-1]
+        if (not _is_meaningful(a_prev)
+                and not _is_meaningful(a_last)
+                and getattr(a_prev, 'piece_id', None) == getattr(a_last, 'piece_id', None)
+                and a_prev.from_tile == a_last.to_tile
+                and a_prev.to_tile == a_last.from_tile):
+            penalty += EVAL_PARAMS.backtrack_penalty_light  # light nudge — might still be right move
+
+    # --- Pattern 2: same move made twice (A->B ... A->B) with nothing in between ---
+    if len(actions) >= 3:
+        a1, a2, a3 = actions[-3], actions[-2], actions[-1]
+        if (not _is_meaningful(a1)
+                and not _is_meaningful(a2)
+                and not _is_meaningful(a3)
+                and getattr(a1, 'piece_id', None) == getattr(a3, 'piece_id', None)
+                and a1.from_tile == a3.from_tile
+                and a1.to_tile == a3.to_tile):
+            penalty += EVAL_PARAMS.backtrack_penalty_strong # clearly going nowhere, stronger deterrent
+
+    return penalty
+
+
 def _development_score(chess_board, color: str) -> float:
     """Opening/middlegame development and pawn-structure guidance."""
     phase = game_phase(chess_board)
@@ -756,6 +806,9 @@ def evaluate(chess_board, color, p=None) -> float:
 
     classical += _development_score(chess_board, WHITE)
     classical -= _development_score(chess_board, BLACK)
+
+    classical -= _repetition_penalty(chess_board, WHITE)
+    classical += _repetition_penalty(chess_board, BLACK)
 
     # Phase Signals
     phase = game_phase(chess_board)
@@ -930,14 +983,22 @@ def _is_quiet_backtrack(board, piece, move: str) -> bool:
     if is_capture or is_promotion or is_castle:
         return False
 
-    # same side's previous move is 2 plies ago
+    # Check 2 plies back (same side's last move)
     prev_own_action = actions[-2]
-
-    return (
-        getattr(prev_own_action, "piece_id", None) == piece.id and
+    if (getattr(prev_own_action, "piece_id", None) == piece.id and
         getattr(prev_own_action, "to_tile", None) == piece.location and
-        getattr(prev_own_action, "from_tile", None) == move
-    )
+        getattr(prev_own_action, "from_tile", None) == move):
+        return True
+
+    # Also check 4 plies back (catches rook a1->d1->a1 oscillation)
+    if len(actions) >= 4:
+        prev_own_action_2 = actions[-4]
+        if (getattr(prev_own_action_2, "piece_id", None) == piece.id and
+            getattr(prev_own_action_2, "to_tile", None) == piece.location and
+            getattr(prev_own_action_2, "from_tile", None) == move):
+            return True
+
+    return False
 
 
 def _see(board, square: str, color: str) -> float:
@@ -996,7 +1057,10 @@ def _see(board, square: str, color: str) -> float:
 
 
 def _passes_opening_sanity(board, piece, move: str) -> bool:
-    """Reject legal moves that are positionally/safety suspect."""
+    in_opening = _opening_phase(board)  # already defined: ≤10 actions
+    if not in_opening:
+        return True  # only restrict during the opening
+
     target_tile = board._get_tile(move)
     is_capture = (
         target_tile is not None and
@@ -1128,6 +1192,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 1. Captures: strong MVV-LVA
     if is_capture:
+        see = 0.0
         snap = board._snapshot_state()
         try:
             board._move_piece(piece, move, simulate=True)
@@ -1209,10 +1274,16 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 7. Quiet backtrack penalty
     if _is_quiet_backtrack(board, piece, move):
-        score -= 0.30
+        score -= 1.5
+
+    # 7.5. penalize moving the same piece back to back
+    if color is not None and len(board.players[color].actions) > 2:
+        if board.players[color].actions[-1].piece_id == piece.id:
+            score -= 0.5
 
     # 8. Quiet move ordering
     if is_quiet:
+        see = 0.0
         snap = board._snapshot_state()
         try:
             board._move_piece(piece, move, simulate=True)
@@ -1262,6 +1333,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
                 turn: str, depth: int = 4, deadline: float = None) -> float:
     """
     Internal quiescence worker with explicit turn tracking.
+    Search only captures from noisy positions.
     """
     if deadline is not None and time.time() >= deadline:
         return evaluate(chess_board, root_color)
@@ -1271,25 +1343,21 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
 
     stand_pat = evaluate(chess_board, root_color)
 
-    DELTA = 9.5
-
+    # Stand-pat pruning
     if maximizing:
         if stand_pat >= beta:
             return stand_pat
-        if stand_pat < alpha - DELTA:
-            return stand_pat
         alpha = max(alpha, stand_pat)
+        best = stand_pat
     else:
         if stand_pat <= alpha:
             return stand_pat
-        if stand_pat > beta + DELTA:
-            return stand_pat
         beta = min(beta, stand_pat)
+        best = stand_pat
 
     if depth == 0:
         return stand_pat
 
-    # Collect captures only (skip king-capture moves)
     captures = []
     for piece in chess_board.players[turn].pieces:
         for move in piece.moves:
@@ -1299,7 +1367,6 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
                     continue
                 victim_val = PIECE_VALUES[target_tile.piece.name]
                 attacker_val = PIECE_VALUES[piece.name]
-                # MVV-LVA score: prefer capturing high-value pieces with low-value attackers
                 order = victim_val * 10 - attacker_val
                 captures.append((piece, move, order))
 
@@ -1308,37 +1375,51 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
 
     captures.sort(key=lambda x: x[2], reverse=True)
 
-    best = stand_pat
-    for piece, move, _ in captures[:8]:  # cap at 8 captures per node
+    for piece, move, _ in captures[:8]:
         snap = chess_board._snapshot_state()
         try:
             chess_board._move_piece(piece, move, simulate=True)
+
+            # reject illegal self-check branches
+            chess_board._sync_board()
+            if chess_board._test_check(turn):
+                continue
+
             chess_board._refresh_search_state_for_turn(next_turn)
 
-            score = _quiescence(chess_board, alpha, beta, root_color, next_turn, depth - 1, deadline)
+            score = _quiescence(
+                chess_board,
+                alpha,
+                beta,
+                root_color,
+                next_turn,
+                depth - 1,
+                deadline
+            )
         except ValueError as e:
             if "kings cannot be captured" in str(e):
-                chess_board._restore_state(snap)
                 continue
-            chess_board._restore_state(snap)
             raise
         finally:
             chess_board._restore_state(snap)
 
+        if score is None:
+            raise ValueError(
+                f"_quiescence returned None for {piece} {piece.location}->{move}"
+            )
+
         if maximizing:
             if score > best:
                 best = score
-            if score > alpha:
-                alpha = score
-            if alpha >= beta:
-                break
+            if best >= beta:
+                return best
+            alpha = max(alpha, best)
         else:
             if score < best:
                 best = score
-            if score < beta:
-                beta = score
-            if beta <= alpha:
-                break
+            if best <= alpha:
+                return best
+            beta = min(beta, best)
 
     return best
 
@@ -1396,6 +1477,18 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 color=turn,
                 repertoire_name=repertoire_name
             )
+
+            if order_score is None:
+                raise ValueError(
+                    f"move_order_score returned None for {piece} {piece.location}->{move}"
+                )
+
+            if not isinstance(order_score, (int, float)):
+                raise TypeError(
+                    f"move_order_score returned non-numeric score {order_score!r} "
+                    f"for {piece} {piece.location}->{move}"
+                )
+            
             all_moves.append((piece, move, order_score))
 
     all_moves.sort(key=lambda pm: pm[2], reverse=True)
@@ -1500,6 +1593,13 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 debug_max_children=debug_max_children,
                 deadline=deadline
             )
+
+            if score is None:
+                raise ValueError(
+                    f"minimax returned None at ply={ply} "
+                    f"turn={turn} piece={piece} from={from_sq} to={move} "
+                    f"depth={depth} next_turn={next_turn}"
+                )
 
             found_legal_child = True
 
@@ -1618,6 +1718,17 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
             repertoire_name=repertoire_name
         )
 
+        if order_score is None:
+            raise ValueError(
+                f"move_order_score returned None for {piece} {piece.location}->{move}"
+            )
+
+        if not isinstance(order_score, (int, float)):
+            raise TypeError(
+                f"move_order_score returned non-numeric score {order_score!r} "
+                f"for {piece} {piece.location}->{move}"
+            )
+
         candidate_moves.append((piece, move, order_score))
 
     # Add search depth for limited move list and reduced piece counts
@@ -1656,7 +1767,14 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         root_cap = 14
 
     if len(candidate_moves) > root_cap and total_pieces > 10:
-        candidate_moves = candidate_moves[:root_cap]
+        captures = [
+            m for m in candidate_moves
+            if chess_board._get_tile(m[1]) is not None
+            and chess_board._get_tile(m[1]).piece is not None
+            and chess_board._get_tile(m[1]).piece.color != m[0].color
+        ]
+        quiet = [m for m in candidate_moves if m not in captures]
+        candidate_moves = captures + quiet[:max(0, root_cap - len(captures))]
 
     if debug >= 1:
         _debug_log(
@@ -1687,9 +1805,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
             # Return mated opponent move immediately
             opp_moves = _search_legal_moves(chess_board, next_turn, repertoire_name=repertoire_name)
-            if len(opp_moves) == 0 and chess_board.players[next_turn].checked:
-                if debug >= 1:
-                    _debug_log(debug, 2 if debug >= 2 else 1, "immediate mate found")
+            if len(chess_board.players[next_turn].possible_moves) == 0 and chess_board.players[next_turn].checked:
                 return (from_sq, move)
             
             if fallback is None:
@@ -1703,14 +1819,19 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
                 search_depth - 1,
                 next_turn,
                 color,
-                float('-inf'),   # fresh window per root move
-                float('inf'),
+                alpha,
+                beta,
                 repertoire_name=repertoire_name,
                 ply=2,
                 debug=debug,
                 debug_max_children=debug_max_children,
                 deadline=deadline
             )
+
+            if score is None:
+                raise ValueError(
+                    f"root minimax returned None for {piece} {from_sq}->{move}"
+                )
 
             if debug >= 1:
                 _debug_log(debug, 2 if debug >= 2 else 1, f"root result => {_fmt_score(score)}")
@@ -1782,6 +1903,10 @@ def main():
         total_promotions = 0
         white_wins = 0
         black_wins = 0
+
+        num_moves = 0 
+        num_castles = 0        
+        num_promo = 0
 
         start_time = time.time()
 
