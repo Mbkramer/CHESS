@@ -642,7 +642,7 @@ def _hanging_pieces(chess_board, color: str) -> float:
             score -= EVAL_PARAMS.hanging_undefended_weight * piece_weight
         elif attackers > defenders:
             score -= EVAL_PARAMS.hanging_outnumbered_weight * piece_weight
-            
+
     return score
 
 
@@ -1827,7 +1827,7 @@ def main():
                         black_win = "1/2"
 
                     else:
-                        move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=120)
+                        move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=75)
 
                         if move is None:
                             # Treat this as a terminal/search failure instead of silently skipping the turn

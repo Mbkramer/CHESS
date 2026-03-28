@@ -302,7 +302,7 @@ def game_loop(chess_board: ChessBoard, game_input):
                 bot_board = copy.deepcopy(chess_board)
 
                 # Cap bot decions making time
-                move_budget = 120 # Generouse 2 minutes
+                move_budget = 75 # Generouse 2 minutes
                 depth = 2
 
                 # Under a shot clock
