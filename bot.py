@@ -155,11 +155,9 @@ def _debug_log(debug: int, level: int, text: str, is_last: bool | None = None):
 def _fmt_score(x) -> str:
     if x == float("inf"):  return "inf"
     if x == float("-inf"): return "-inf"
-    return f"{x:.4f}"   # was .2f — use 4 decimal places
+    return f"{x:.4f}"   
 
-def _search_log(msg: str):
-    if DEBUG_SEARCH:
-        print(msg)
+
 
 # ── Piece-Square Tables ───────────────────────────────────────────────────────
 # Each table is 64 values, index 0 = a1, index 63 = h8 (white's perspective)
@@ -1892,6 +1890,7 @@ def main():
         avg_time = 0
         total_time = 0
         avg_num_moves = 0
+        total_moves = 0
         total_castles = 0
         total_promotions = 0
         white_wins = 0
@@ -2010,7 +2009,8 @@ def main():
         end_time = time.time()
         total_time = fmt_time(end_time - start_time)
         avg_time = fmt_time((end_time - start_time)/games)
-        avg_num_moves = avg_num_moves/games
+        total_moves += num_moves
+        avg_num_moves = total_moves/(game+1)
 
         print(f"{games} GAME EVAL COMPLETE\nWINS:  WHITE: {white_wins}  BLACK: {black_wins}  \nTIME: {total_time}  AVG GAME TIME {avg_time}  \nNUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  \nNUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
     
