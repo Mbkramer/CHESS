@@ -277,6 +277,9 @@ class EvalParams:
     open_file_penalty:     float = 0.25
     semi_open_file_penalty: float = 0.10
     attacker_proximity_weight: float = 0.15
+    immediate_proximity_penalty: float = 0.12
+    moderate_proximity_penalty: float = 0.05
+
 
     # ── Piece bonuses ──
     bishop_pair_bonus:       float = 0.30
@@ -538,16 +541,16 @@ def _king_safety(chess_board, color) -> float:
             if chess_board._is_square_attacked(sq, opponent):
                 # Heavier penalty for immediate ring
                 if max(abs(df), abs(dr)) == 1:
-                    score -= 0.12
+                    score -= EVAL_PARAMS.immediate_proximity_penalty
                 else:
-                    score -= 0.05
+                    score -= EVAL_PARAMS.moderate_proximity_penalty
             
     return score
 
 
 def _bishop_pair(chess_board, color) -> float:
     bishops = [p for p in chess_board.players[color].pieces if p.name == 'B']
-    return 0.3 if len(bishops) >= 2 else 0.0
+    return EVAL_PARAMS.bishop_pair_bonus if len(bishops) >= 2 else 0.0
 
 
 def _rook_on_open_file(chess_board, color) -> float:
@@ -567,9 +570,9 @@ def _rook_on_open_file(chess_board, color) -> float:
             continue
         f = piece.location[0]
         if f not in all_pawn_files:
-            score += 0.25       # fully open file
+            score += EVAL_PARAMS.rook_open_file_bonus      # fully open file
         elif f not in friendly_pawn_files:
-            score += 0.1        # semi-open (no friendly pawn)
+            score += EVAL_PARAMS.rook_semi_open_bonus       # semi-open (no friendly pawn)
     return score
 
 
@@ -580,6 +583,7 @@ def _square_pressure(board, square: str, color: str) -> tuple[int, int]:
     attackers = board.pressure_map[opp].get(square, 0)
     defenders = board.pressure_map[color].get(square, 0)
     return attackers, defenders
+
 
 def _should_extend(piece, move, chess_board):
     target_tile = chess_board._get_tile(move)
@@ -813,8 +817,8 @@ def evaluate(chess_board, color, p=None) -> float:
     # Phase Signals
     phase = game_phase(chess_board)
     model_scaled = model_score * 5
-    # Clamp model influence (important)
-    model_scaled = max(min(model_scaled, 3), -3)
+    
+    model_scaled = max(min(model_scaled, 5), -5)
 
     # Phase weights — model is strongest early (trained on human openings, suppresses
     # positional blunders), tapers as game becomes tactical (classical eval more reliable).
@@ -824,17 +828,20 @@ def evaluate(chess_board, color, p=None) -> float:
         # Deep opening: model has strongest signal, classical can misread piece activity (added .1 to all)
         model_weight = 0.3
     elif phase == EARLY:
-        model_weight = 0.2
-    elif phase == MIDDLE:
         model_weight = 0.15
+    elif phase == MIDDLE:
+        model_weight = 0.12
     else:  # LATE
-        model_weight = 0.1
+        model_weight = 0.10
 
     classical_weight = 1 - model_weight
 
     score = model_weight * model_scaled + classical_weight * classical
 
-    return score if color == WHITE else -score
+    if color == BLACK:
+        score = -score
+
+    return score
 
 
 def evaluate_fast(chess_board, p=None) -> float:
@@ -1001,7 +1008,7 @@ def _is_quiet_backtrack(board, piece, move: str) -> bool:
     return False
 
 
-def _see(board, square: str, color: str) -> float:
+def _see(board, square: str, color: str, captured_val: float = 0.0) -> float:
     """
     Static Exchange Evaluation (SEE).
 
@@ -1019,13 +1026,12 @@ def _see(board, square: str, color: str) -> float:
     """
     opp = BLACK if color == WHITE else WHITE
 
-    # Value of the piece that just arrived on `square`
     tile = board._get_tile(square)
     if tile is None or tile.piece is None:
-        return 0.0
+        return captured_val
+
     target_val = PIECE_VALUES[tile.piece.name]
 
-    # Find the cheapest opponent attacker
     cheapest_val = float('inf')
     for p in board.players[opp].pieces:
         if square in p.moves and p.name != 'K':
@@ -1034,11 +1040,8 @@ def _see(board, square: str, color: str) -> float:
                 cheapest_val = val
 
     if cheapest_val == float('inf'):
-        # Nobody can take — square is safe
-        return 0.0
+        return captured_val
 
-    # Opponent captures: they gain `target_val`, then we recapture
-    # Find our cheapest recapture after the exchange
     recapture_val = float('inf')
     for p in board.players[color].pieces:
         if p.location != square and square in p.moves and p.name != 'K':
@@ -1047,13 +1050,9 @@ def _see(board, square: str, color: str) -> float:
                 recapture_val = val
 
     if recapture_val == float('inf'):
-        # Opponent takes for free — pure loss of target piece
-        return -target_val
+        return captured_val - target_val
 
-    # Opponent gains target_val, we recapture gaining cheapest_val,
-    # net from color's perspective: we lose target, gain back cheapest_attacker
-    # (simplified one-recapture SEE — accurate for the common cases)
-    return cheapest_val - target_val
+    return captured_val + cheapest_val - target_val
 
 
 def _passes_opening_sanity(board, piece, move: str) -> bool:
@@ -1067,6 +1066,11 @@ def _passes_opening_sanity(board, piece, move: str) -> bool:
         target_tile.piece is not None and
         target_tile.piece.color != piece.color
     )
+    
+    if is_capture:
+        captured_val = PIECE_VALUES[target_tile.piece.name]
+    else:
+        captured_val = 0.0
 
     in_opening = _opening_phase(board)
 
@@ -1089,7 +1093,7 @@ def _passes_opening_sanity(board, piece, move: str) -> bool:
         try:
             board._move_piece(piece, move, simulate=True)
             board._sync_board()
-            see_score = _see(board, move, piece.color)
+            see_score = _see(board, move, captured_val=captured_val, color=piece.color)
         except Exception:
             see_score = 0.0
         finally:
@@ -1191,6 +1195,11 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     )
     is_quiet = not is_capture
 
+    if is_capture:
+        captured_val = PIECE_VALUES[target_tile.piece.name]
+    else:
+        captured_val = 0.0
+
     # 1. Captures: strong MVV-LVA
     if is_capture:
         see = 0.0
@@ -1208,7 +1217,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
             board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
 
-            see = _see(board, move, mover)
+            see = _see(board, move, captured_val=captured_val, color=mover)
 
             if see < 0:
                 # Losing capture, push it down hard
@@ -1232,7 +1241,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 3. Checks
     if _could_plausibly_give_check(board, piece, move):
-        score += 0.8
+        score += 0.6
 
     # 4. Castling
     if piece.color == WHITE and piece.name == "K":
@@ -1272,10 +1281,10 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 7. Quiet backtrack penalty
     if _is_quiet_backtrack(board, piece, move):
-        score -= 1.5
+        score -= 2.0
 
-    # 7.5. penalize moving the same piece back to back
-    if color is not None and len(board.players[color].actions) > 2:
+    # 7.5. penalize moving the same piece back to back in late game
+    if color is not None and len(board.players[color].actions) > 2 and LATE == game_phase(board):
         if board.players[color].actions[-1].piece_id == piece.id:
             score -= 0.5
 
@@ -1296,7 +1305,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
             board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
 
-            see = _see(board, move, mover)
+            see = _see(board, move, captured_val=captured_val, color=mover)
 
             if see < 0:
                 # Quiet move lands on a tactically losing square
@@ -1319,10 +1328,6 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             to_attackers, to_defenders = _square_pressure(board, move, piece.color)
             if to_attackers > to_defenders:
                 score -= 1.5 * (piece_val - victim_val)
-
-    # 10. Don't bring queen out too early unless strong move
-    if history_len < 10 and piece.name == 'Q':
-        score -= 0.5
 
     return score
 
@@ -1440,6 +1445,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
     role = "MAX" if maximizing else "MIN"
     next_turn = BLACK if turn == WHITE else WHITE
 
+    # Time cutoff check 
     if deadline is not None and time.time() >= deadline:
         return evaluate(chess_board, root_color)
 
@@ -1870,17 +1876,6 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
     return chosen
 
 
-"""
-Run x number of self play games and print outcomes
-"""
-
-def _catch_loop(last_piece_move_counts, piece):
-
-    
-
-    return last_piece_move_counts
-
-
 def main():
     from chess_board import ChessBoard
     import time
@@ -1950,7 +1945,7 @@ def main():
                         black_win = "1/2"
 
                     else:
-                        move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=75)
+                        move = best_move(chess_board, turn, depth=depth, debug=debug, time_budget=90)
 
                         if move is None:
                             # Treat this as a terminal/search failure instead of silently skipping the turn

@@ -178,9 +178,15 @@ def game_loop(chess_board: ChessBoard, game_input):
                     else:
                         print("\033c", end="", flush=True)
 
-
                 if game_input[2] == None:
                     running = player_menu(chess_board, last_move_times, turn)
+                    if running == False:
+                        if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                            black_win = "1"
+                            white_win = "0"
+                        elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                            white_win = "1"
+                            black_win = "0"
                 elif game_input[2] != None:
                     running = player_menu(chess_board, shot_clocks, turn)
 
@@ -214,7 +220,7 @@ def game_loop(chess_board: ChessBoard, game_input):
                 print("Waiting on bot move..\n")
 
                 # Cap bot decions making time
-                move_budget = 120 # Generouse 2 minutes
+                move_budget = 90 # Generouse 2 minutes
                 depth = 2
 
                 # Under a shot clock
@@ -377,9 +383,9 @@ def game_loop(chess_board: ChessBoard, game_input):
             else:
                 print("Log opponent move below")
                 waiting = True
+                start_time = time.time()
                 while waiting:
                     user_input = input("Type: 'from_tile to_tile' (without quotes) and press Enter to log a move. example: e2 e4\n")
-
                     if user_input.lower() == "exit":
                         return False
 
@@ -398,6 +404,8 @@ def game_loop(chess_board: ChessBoard, game_input):
                     except Exception as e:
                         print("Move failed.. ")
                         print(e)
+
+                end_time = time.time()
 
                 # Capture move times
                 if turn == WHITE:

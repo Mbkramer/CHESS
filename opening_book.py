@@ -416,12 +416,13 @@ OPENING_BOOK: Dict[Tuple[UCI, ...], OpeningNode] = {
     ),
 
     # Shallow anti scholars guard
-    ("e2e4", "e7e5", "d1h5"): OpeningNode(
+    ("e2e4", "e7e5", "d1h5", "h5f3"): OpeningNode(
         name="Wayward Queen Attack",
         eco="C20",
         continuations=(
             BookMove("b8c6", 4.0),
-            BookMove("g8f6", 2.0),
+            BookMove("g7g6", 2.0),
+            BookMove("c6d4", 1.0),
         ),
         style_tags=("defensive", "anti-trap"),
     ),
