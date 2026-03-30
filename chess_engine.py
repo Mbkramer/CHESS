@@ -1,10 +1,18 @@
 import sys
+import os
 import time
 import random
 from chess_board import ChessBoard
-from bot import best_move, export_game_to_pgn, MODEL_PATH, MODEL_NAME
+from bot import best_move, MODEL_PATH, MODEL_NAME
 from opening_book import REPERTOIRES, BALANCED, SOLID, AGRESSIVE, TACTICAL
 import copy
+
+try:
+    import chess
+    import chess.pgn
+except Exception:
+    chess = None
+from datetime import datetime
 
 ROWS = ["1", "2", "3", "4", "5", "6", "7", "8"]
 COLUMNS = ["a", "b", "c", "d", "e", "f", "g", "h"]
@@ -27,6 +35,87 @@ def fmt_time(seconds):
     parts.append(f"{s:.1f}s")
 
     return " ".join(parts)
+
+def export_game_to_pgn(chess_board, game_input, result: str = "*"):
+    """
+    Exports a completed game to a PGN file using the python-chess library. 
+    The PGN file will be saved in the 'data/played_games/{game_type}/' directory, 
+    where {game_type} is determined by the type of game played (e.g., '2p', 'bot', 'aid').
+
+    Modified from the original in bot.py
+    """
+
+    if chess is None:
+        raise RuntimeError("python-chess is required for PGN export")
+
+    game_type = game_input[0].upper()
+    output_path = f"data/played_games/{game_type}/"
+
+    model_name = os.path.basename(MODEL_PATH).replace(".pt", "")
+
+    if game_input[0] == '2p':
+        white_player_name = "Person One"
+        black_player_name = "Perosn Two"
+    elif game_input[0] == 'bot':
+        if game_input[1] == WHITE:
+            white_player_name = "Human"
+            black_player_name = model_name
+        elif game_input[1] == BLACK:
+            white_player_name = model_name
+            black_player_name = "Human"
+    elif game_input[0] == 'aid':
+        if game_input[1] == WHITE:
+            white_player_name = "Human (Bot Aid)"
+            black_player_name = "Opponent"
+        elif game_input[1] == BLACK:
+            white_player_name = "Opponent"
+            black_player_name = "Human (Bot Aid)"
+
+    board = chess.Board()
+    game = chess.pgn.Game()
+
+    game.headers["Event"] = game_type
+    game.headers["Site"] = "Local"
+    game.headers["Date"] = datetime.now().strftime("%m.%d.%Y")
+    game.headers["White"] = white_player_name
+    game.headers["Black"] = black_player_name
+    game.headers["Result"] = result
+
+    node = game
+
+    for i, action in enumerate(chess_board.actions):
+        move_uci = action.from_tile + action.to_tile
+        if action.promotion:
+            move_uci += action.promotion.lower()
+
+        move = chess.Move.from_uci(move_uci)
+
+        if move not in board.legal_moves:
+            print(f"\nFailed at action {i}: {action}")
+            print(f"UCI attempted: {move_uci}")
+            print(f"python-chess board:\n{board}")
+            print(f"Legal moves: {list(board.legal_moves)}")
+            raise ValueError(f"Illegal move during PGN export: {move_uci}")
+
+        board.push(move)
+        node = node.add_variation(move)
+
+    save_dir = output_path
+    os.makedirs(save_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}.pgn"
+
+    if game_input[0] != '2p':
+        filename = f"{model_name}_{timestamp}.pgn"
+
+    filepath = os.path.join(save_dir, filename)
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        exporter = chess.pgn.FileExporter(f)
+        game.accept(exporter)
+
+    return filepath
 
 def player_menu(chess_board, move_times, turn) -> bool:
 
@@ -133,6 +222,24 @@ def game_loop(chess_board: ChessBoard, game_input):
 
             end_time = time.time()
 
+            # Check for game end conditions
+            if running == False:
+                if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                    black_win = "1"
+                    white_win = "0"
+                elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                    white_win = "1"
+                    black_win = "0"
+                elif (
+                    len(chess_board.players[WHITE].possible_moves) == 0 and not chess_board.players[WHITE].mated
+                    or len(chess_board.players[BLACK].possible_moves) == 0 and not chess_board.players[BLACK].mated
+                ):
+                    white_win = "1/2"
+                    black_win = "1/2"
+                else:
+                    white_win = "*"
+                    black_win = "*"
+
             # Capture move times
             if turn == WHITE:
                 last_move_times[WHITE] = end_time - start_time
@@ -155,7 +262,6 @@ def game_loop(chess_board: ChessBoard, game_input):
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
                         white_win = "1"
                         black_win = "0"
-                    print(f"GAME OVER")
 
             turn = BLACK if turn == WHITE else WHITE
 
@@ -187,6 +293,16 @@ def game_loop(chess_board: ChessBoard, game_input):
                         elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
                             white_win = "1"
                             black_win = "0"
+                        elif (
+                            len(chess_board.players[WHITE].possible_moves) == 0 and not chess_board.players[WHITE].mated
+                            or len(chess_board.players[BLACK].possible_moves) == 0 and not chess_board.players[BLACK].mated
+                        ):
+                            white_win = "1/2"
+                            black_win = "1/2"
+                        else:
+                            white_win = "*"
+                            black_win = "*"
+
                 elif game_input[2] != None:
                     running = player_menu(chess_board, shot_clocks, turn)
 
@@ -205,17 +321,30 @@ def game_loop(chess_board: ChessBoard, game_input):
 
             # Bot Turn
             else:
+
                 if len(chess_board.players[bot_color].possible_moves) == 0:
                     print(f"MATED: {COLORS[bot_color]} has been mated...\n")
-                    print("GAME OVER")
-                    if bot_color == WHITE:
+                    running = False
+
+                if running == False:
+                    if COLORS[turn] == WHITE and chess_board.players[turn].mated:
                         black_win = "1"
                         white_win = "0"
-                    elif bot_color == BLACK:
+                    elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
                         white_win = "1"
                         black_win = "0"
-                    running = False
-                    return
+                    elif (
+                        len(chess_board.players[WHITE].possible_moves) == 0 and not chess_board.players[WHITE].mated
+                        or len(chess_board.players[BLACK].possible_moves) == 0 and not chess_board.players[BLACK].mated
+                    ):
+                        white_win = "1/2"
+                        black_win = "1/2"
+                    else:
+                        white_win = "*"
+                        black_win = "*"
+
+                    break
+                    
                 
                 print("Waiting on bot move..\n")
 
@@ -274,7 +403,6 @@ def game_loop(chess_board: ChessBoard, game_input):
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
                         white_win = "1"
                         black_win = "0"
-                    print(f"GAME OVER")
             
             turn = BLACK if turn == WHITE else WHITE
 
@@ -301,15 +429,26 @@ def game_loop(chess_board: ChessBoard, game_input):
 
                 if len(chess_board.players[turn].possible_moves) == 0:
                     print(f"MATED: {COLORS[turn]} has been mated...\n")
-                    print("GAME OVER")
-                    if COLORS[turn] == WHITE:
+                    running = False
+
+                if running == False:
+                    if COLORS[turn] == WHITE and chess_board.players[turn].mated:
                         black_win = "1"
                         white_win = "0"
-                    elif COLORS[turn] == BLACK:
+                    elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
                         white_win = "1"
                         black_win = "0"
-                    running = False
-                    return
+                    elif (
+                        len(chess_board.players[WHITE].possible_moves) == 0 and not chess_board.players[WHITE].mated
+                        or len(chess_board.players[BLACK].possible_moves) == 0 and not chess_board.players[BLACK].mated
+                    ):
+                        white_win = "1/2"
+                        black_win = "1/2"
+                    else:
+                        white_win = "*"
+                        black_win = "*"
+                    
+                    break
                 
                 print("Waiting on bot recomendation..\n")
                 bot_board = copy.deepcopy(chess_board)
@@ -431,13 +570,16 @@ def game_loop(chess_board: ChessBoard, game_input):
                         print(f"White is out of time. \nBLACK SHOT CLOCK: {fmt_time(shot_clocks[BLACK])}")
                         white_win = "1"
                         black_win = "0"
-                    print(f"GAME OVER")
 
-    if game_input[0] == 'bot':
-        export_game_to_pgn(chess_board, output_path=f"data/bot_games/player_vs_{MODEL_NAME}_d{depth}", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
-    elif game_input[0] == '2p':
-        export_game_to_pgn(chess_board, output_path=f"data/bot_games/player_vs_player", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
-    
+
+    # Store PGN of game
+    if white_win == "*" and black_win == "*":
+        result = "*"
+    else:
+        result = f"{white_win}-{black_win}"
+    filepath = export_game_to_pgn(chess_board, game_input, result=result)
+
+    print(f"Saved PGN to: {filepath}\n")
     print("GAME LOG: ")
     for player_action in chess_board.actions:
         print(player_action)
