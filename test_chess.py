@@ -1,11 +1,16 @@
 import unittest
 import copy
+import os
 
 from chess_board import ChessBoard
 from player import PlayerAction
 from bot import best_move, minimax
 from bot import move_order_score, _passes_opening_sanity, _see, _square_pressure
 from opening_book import choose_book_move
+
+import torch
+from tensor import board_to_tensor
+from model import load_model
 
 WHITE = 'W'
 BLACK = 'B'
@@ -1268,6 +1273,317 @@ class TestBotDecisionQuality(ChessTestCase):
         self.assertIsNotNone(book_move)
         from_sq, to_sq, _meta = book_move
         self.assertEqual((from_sq, to_sq), ("e2", "e4"))
+
+
+# Reuse these from the existing test file:
+# - WHITE
+# - BLACK
+# - ChessTestCase
+# - set_position
+# - make_move
+
+
+class TestKillBotMatePatterns(ChessTestCase):
+    """
+    Tests the raw kill-bot NN on mate-near positions.
+
+    Important:
+    - This scores the MODEL directly, not bot.evaluate().
+    - Positive score = good for White
+    - Negative score = good for Black
+
+    These are not meant to prove full tactical correctness.
+    They are meant to sanity-check whether the kill model prefers
+    canonical mate-net positions and likes the mating move even more.
+    """
+
+    MODEL_PATH = os.environ.get("CHESS_KILL_MODEL_PATH", "check_points/kill_bot_v1.pt")
+    _kill_model = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not os.path.exists(cls.MODEL_PATH):
+            raise unittest.SkipTest(f"Kill bot model not found: {cls.MODEL_PATH}")
+        cls._kill_model = load_model(cls.MODEL_PATH)
+        cls._kill_model.eval()
+
+    def _raw_model_score(self, board, turn):
+        """
+        Raw NN output in [-1, 1] approximately.
+        Positive => White favored
+        Negative => Black favored
+        """
+        x = torch.tensor(board_to_tensor(board, turn=turn)).unsqueeze(0).float()
+        with torch.no_grad():
+            return self._kill_model(x).item()
+
+    def _assert_white_stays_strongly_winning_after_move(
+        self, board, from_sq, to_sq, floor=0.20, max_drop=0.05
+    ):
+        before = self._raw_model_score(board, WHITE)
+        make_move(board, from_sq, to_sq)
+        after = self._raw_model_score(board, BLACK)
+
+        self.assertGreater(
+            before, floor,
+            f"Expected White to already be clearly winning before {from_sq}->{to_sq}, got {before:.4f}"
+        )
+        self.assertGreater(
+            after, floor,
+            f"Expected White to remain clearly winning after {from_sq}->{to_sq}, got {after:.4f}"
+        )
+        self.assertGreater(
+            after, before - max_drop,
+            f"Expected White move {from_sq}->{to_sq} not to collapse evaluation. "
+            f"before={before:.4f}, after={after:.4f}"
+        )
+        return before, after
+
+
+    def _assert_black_stays_strongly_winning_after_move(
+        self, board, from_sq, to_sq, floor=-0.20, max_rise=0.05
+    ):
+        before = self._raw_model_score(board, BLACK)
+        make_move(board, from_sq, to_sq)
+        after = self._raw_model_score(board, WHITE)
+
+        self.assertLess(
+            before, floor,
+            f"Expected Black to already be clearly winning before {from_sq}->{to_sq}, got {before:.4f}"
+        )
+        self.assertLess(
+            after, floor,
+            f"Expected Black to remain clearly winning after {from_sq}->{to_sq}, got {after:.4f}"
+        )
+        self.assertLess(
+            after, before + max_rise,
+            f"Expected Black move {from_sq}->{to_sq} not to collapse evaluation. "
+            f"before={before:.4f}, after={after:.4f}"
+        )
+        return before, after
+
+    # ------------------------------------------------------------------
+    # 1. Back Rank Mate
+    # ------------------------------------------------------------------
+    def test_killbot_back_rank_mate_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'g1'),
+                ('Q', 'd1'),
+                ('R', 'd7'),
+            ],
+            black_pieces=[
+                ('K', 'g8'),
+                ('P', 'f7'),
+                ('P', 'g7'),
+                ('P', 'h7'),
+            ],
+        )
+
+        # White is already crushing; Rd8# should be even better.
+        pre = self._raw_model_score(b, WHITE)
+        self.assertGreater(pre, 0.15, f"Expected White-favored mate-net score, got {pre:.4f}")
+
+        before, after = self._assert_white_stays_strongly_winning_after_move(b, 'd7', 'd8')
+        print(f"\nBack Rank Mate: before={before:.4f}, after={after:.4f}")
+
+    # ------------------------------------------------------------------
+    # 2. Scholar's Mate
+    # ------------------------------------------------------------------
+    def test_killbot_scholars_mate_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'e1'),
+                ('Q', 'h5'),
+                ('B', 'c4'),
+            ],
+            black_pieces=[
+                ('K', 'e8'),
+                ('P', 'f7'),
+                ('P', 'g7'),
+                ('P', 'h7'),
+                ('P', 'e5'),
+                ('N', 'c6'),
+            ],
+        )
+
+        pre = self._raw_model_score(b, WHITE)
+        self.assertGreater(pre, 0.10, f"Expected White-favored Scholar pattern score, got {pre:.4f}")
+
+        before, after = self._assert_white_stays_strongly_winning_after_move(b, 'h5', 'f7')
+        print(f"\nScholar's Mate: before={before:.4f}, after={after:.4f}")
+
+    # ------------------------------------------------------------------
+    # 3. Fool's Mate
+    # ------------------------------------------------------------------
+    def test_killbot_fools_mate_black(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'e1'),
+                ('P', 'f3'),
+                ('P', 'g4'),
+            ],
+            black_pieces=[
+                ('K', 'e8'),
+                ('Q', 'h4'),
+                ('P', 'e5'),
+            ],
+        )
+
+        # This position is already essentially winning for Black.
+        pre = self._raw_model_score(b, BLACK)
+        self.assertLess(pre, -0.10, f"Expected Black-favored Fool's Mate score, got {pre:.4f}")
+
+        # If you want the pre-move version instead, use queen on d8 and move d8->h4.
+        print(f"\nFool's Mate pattern score for Black to move: {pre:.4f}")
+
+    # ------------------------------------------------------------------
+    # 4. Smothered Mate (mate already on board shape)
+    # ------------------------------------------------------------------
+    def test_killbot_smothered_mate_white_pattern(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'a1'),
+                ('N', 'f7'),
+            ],
+            black_pieces=[
+                ('K', 'h8'),
+                ('R', 'g8'),
+                ('P', 'g7'),
+                ('P', 'h7'),
+            ],
+        )
+
+        # Nf7# shape already represented.
+        score = self._raw_model_score(b, BLACK)
+        # Since Black is to move in a mated-looking structure, White should still be heavily favored.
+        self.assertGreater(score, 0.20, f"Expected White-favored smothered mate pattern, got {score:.4f}")
+        print(f"\nSmothered Mate pattern score: {score:.4f}")
+
+    # ------------------------------------------------------------------
+    # 5. Arabian Mate
+    # ------------------------------------------------------------------
+    def test_killbot_arabian_mate_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'a1'),
+                ('R', 'h1'),
+                ('N', 'f7'),
+            ],
+            black_pieces=[
+                ('K', 'h8'),
+            ],
+        )
+
+        pre = self._raw_model_score(b, WHITE)
+        self.assertGreater(pre, 0.10, f"Expected White-favored Arabian mate-net score, got {pre:.4f}")
+
+        before, after = self._assert_white_stays_strongly_winning_after_move(b, 'h1', 'h7')
+        print(f"\nArabian Mate: before={before:.4f}, after={after:.4f}")
+
+    # ------------------------------------------------------------------
+    # 6. Greco's Mate
+    # ------------------------------------------------------------------
+    """
+    def test_killbot_grecos_mate_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'a1'),
+                ('R', 'h1'),
+                ('B', 'd3'),
+            ],
+            black_pieces=[
+                ('K', 'h8'),
+                ('P', 'g7'),
+            ],
+        )
+
+        pre = self._raw_model_score(b, WHITE)
+        self.assertGreater(pre, 0.10, f"Expected White-favored Greco mate-net score, got {pre:.4f}")
+
+        before, after = self._assert_white_stays_strongly_winning_after_move(b, 'h1', 'h8')
+        print(f"\nGreco's Mate: before={before:.4f}, after={after:.4f}")
+    """
+    # ------------------------------------------------------------------
+    # 7. Lolli's Mate
+    # ------------------------------------------------------------------
+    def test_killbot_lollis_mate_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[
+                ('K', 'a1'),
+                ('Q', 'g7'),
+                ('P', 'h6'),
+            ],
+            black_pieces=[
+                ('K', 'h8'),
+            ],
+        )
+
+        score = self._raw_model_score(b, BLACK)
+        self.assertGreater(score, 0.20, f"Expected White-favored Lolli mate pattern, got {score:.4f}")
+        print(f"\nLolli's Mate pattern score: {score:.4f}")
+
+    # ------------------------------------------------------------------
+    # 8. Simple sanity comparison:
+    #    mate-near position should outscore a neutral sparse ending
+    # ------------------------------------------------------------------
+    def test_killbot_prefers_mate_net_over_neutral_endgame(self):
+        mate_net = ChessBoard()
+        set_position(
+            mate_net,
+            white_pieces=[
+                ('K', 'g1'),
+                ('Q', 'h5'),
+                ('B', 'c4'),
+            ],
+            black_pieces=[
+                ('K', 'e8'),
+                ('P', 'f7'),
+                ('P', 'g7'),
+                ('P', 'h7'),
+                ('P', 'e5'),
+            ],
+        )
+
+        neutral = ChessBoard()
+        set_position(
+            neutral,
+            white_pieces=[
+                ('K', 'e2'),
+                ('P', 'd4'),
+            ],
+            black_pieces=[
+                ('K', 'e7'),
+                ('P', 'd5'),
+            ],
+        )
+
+        mate_score = self._raw_model_score(mate_net, WHITE)
+        neutral_score = self._raw_model_score(neutral, WHITE)
+
+        self.assertGreater(
+            mate_score,
+            neutral_score + 0.10,
+            f"Expected mate-net to outrank neutral ending. "
+            f"mate_score={mate_score:.4f}, neutral_score={neutral_score:.4f}"
+        )
+
+        print(f"\nMate-net vs neutral: mate_score={mate_score:.4f}, neutral_score={neutral_score:.4f}")
 
 
 if __name__ == '__main__':

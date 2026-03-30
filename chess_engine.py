@@ -224,10 +224,10 @@ def game_loop(chess_board: ChessBoard, game_input):
 
             # Check for game end conditions
             if running == False:
-                if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                if chess_board.players[WHITE].mated:
                     black_win = "1"
                     white_win = "0"
-                elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                elif chess_board.players[BLACK].mated:
                     white_win = "1"
                     black_win = "0"
                 elif (
@@ -287,10 +287,10 @@ def game_loop(chess_board: ChessBoard, game_input):
                 if game_input[2] == None:
                     running = player_menu(chess_board, last_move_times, turn)
                     if running == False:
-                        if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                        if chess_board.players[WHITE].mated:
                             black_win = "1"
                             white_win = "0"
-                        elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                        elif chess_board.players[BLACK].mated:
                             white_win = "1"
                             black_win = "0"
                         elif (
@@ -327,10 +327,10 @@ def game_loop(chess_board: ChessBoard, game_input):
                     running = False
 
                 if running == False:
-                    if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                    if chess_board.players[WHITE].mated:
                         black_win = "1"
                         white_win = "0"
-                    elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                    elif chess_board.players[BLACK].mated:
                         white_win = "1"
                         black_win = "0"
                     elif (
@@ -407,7 +407,7 @@ def game_loop(chess_board: ChessBoard, game_input):
             turn = BLACK if turn == WHITE else WHITE
 
 
-    # Player Vs Bot Game
+    # Player with bot aid
     elif game_input[0] == 'aid':
 
         while running:
@@ -432,10 +432,10 @@ def game_loop(chess_board: ChessBoard, game_input):
                     running = False
 
                 if running == False:
-                    if COLORS[turn] == WHITE and chess_board.players[turn].mated:
+                    if chess_board.players[WHITE].mated:
                         black_win = "1"
                         white_win = "0"
-                    elif COLORS[turn] == BLACK and chess_board.players[turn].mated:
+                    elif chess_board.players[BLACK].mated:
                         white_win = "1"
                         black_win = "0"
                     elif (
@@ -520,6 +520,30 @@ def game_loop(chess_board: ChessBoard, game_input):
                     shot_clocks[BLACK] -= last_move_times[BLACK]
 
             else:
+
+                if len(chess_board.players[turn].possible_moves) == 0:
+                    print(f"MATED: {COLORS[turn]} has been mated...\n")
+                    running = False
+
+                if running == False:
+                    if chess_board.players[WHITE].mated:
+                        black_win = "1"
+                        white_win = "0"
+                    elif chess_board.players[BLACK].mated:
+                        white_win = "1"
+                        black_win = "0"
+                    elif (
+                        len(chess_board.players[WHITE].possible_moves) == 0 and not chess_board.players[WHITE].mated
+                        or len(chess_board.players[BLACK].possible_moves) == 0 and not chess_board.players[BLACK].mated
+                    ):
+                        white_win = "1/2"
+                        black_win = "1/2"
+                    else:
+                        white_win = "*"
+                        black_win = "*"
+                    
+                    break
+
                 print("Log opponent move below")
                 waiting = True
                 start_time = time.time()

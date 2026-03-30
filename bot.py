@@ -17,6 +17,9 @@ except Exception:
 MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v5.pt")
 MODEL_NAME = "pgn_2000_2400_v5.pt"
 
+MATE_BOT_PATH = os.environ.get("MATE_BOT_PATH", "check_points/kill_bot_v1.pt")
+MATE_BOT_NAME = "kill_bot_v1.pt"
+
 model = None
 if load_model is not None and os.path.exists(MODEL_PATH):
     try:
@@ -26,6 +29,16 @@ if load_model is not None and os.path.exists(MODEL_PATH):
     except Exception as e:
         print(f"Warning: failed to load bot model from {MODEL_PATH}: {e}")
         model = None
+
+mate_model = None
+if load_model is not None and os.path.exists(MATE_BOT_PATH):
+    try:
+        mate_model = load_model(MATE_BOT_PATH)
+        mate_model.eval()
+        print(f"Mate model loaded from {MATE_BOT_PATH}")
+    except Exception as e:
+        print(f"Warning: failed to load bot model from {MATE_BOT_PATH}: {e}")
+        mate_model = None
 
 WHITE = 'W'
 BLACK = 'B'
@@ -776,12 +789,23 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     if p is None:
         p = EVAL_PARAMS
 
-    model_score = 0.0
-    if model is not None and torch is not None and board_to_tensor is not None:
+    phase = game_phase(chess_board)
+
+    x = None
+    if torch is not None and board_to_tensor is not None:
         tensor = board_to_tensor(chess_board, turn=turn_to_move)
         x = torch.tensor(tensor).unsqueeze(0).float()
+
+    model_score = 0.0
+    if model is not None and x is not None:
         with torch.no_grad():
             model_score = model(x).item()
+
+    mate_score = 0.0
+    if phase != EARLY:
+        if model is not None and x is not None:
+            with torch.no_grad():
+                mate_score = mate_model(x).item()
 
     classical = 0.0
     for piece in chess_board.players[WHITE].pieces:
@@ -812,29 +836,57 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     classical -= _repetition_penalty(chess_board, WHITE)
     classical += _repetition_penalty(chess_board, BLACK)
 
-    # Phase Signals
-    phase = game_phase(chess_board)
+
     model_scaled = model_score * 5
-    
     model_scaled = max(min(model_scaled, 5), -5)
 
-    # Phase weights — model is strongest early (trained on human openings, suppresses
-    # positional blunders), tapers as game becomes tactical (classical eval more reliable).
-    # Also use ply count for a sharper early-game boost independent of piece count.
+    # Model weight 
+    # model is strongest early (best for natural human openings, classical eval can misread piece activity)
+    # classical eval more reliable, model less trained on endgames.
+    # use ply count for a sharper early-game boost independent of piece count.
+
     ply_count = len(getattr(chess_board, "actions", []))
     if ply_count <= 10:
         # Deep opening: model has strongest signal, classical can misread piece activity (added .1 to all)
-        model_weight = 0.3
+        model_weight = 0.30
     elif phase == EARLY:
-        model_weight = 0.15
+        model_weight = 0.20
     elif phase == MIDDLE:
         model_weight = 0.12
     else:  # LATE
         model_weight = 0.10
 
-    classical_weight = 1 - model_weight
+    # Mate Model Weight
+    # Phase in mate_model score more heavily in mid/late game where tactical precision is critical 
+    # classical eval can miss nuances (e.g. positional blunders), 
+    # tapers as game becomes tactical (classical eval more reliable).
 
-    score = model_weight * model_scaled + classical_weight * classical
+    mate_scaled = mate_score * 5.0
+    mate_scaled = max(min(mate_scaled, 5.0), -5.0)
+
+    mate_weight = 0.0
+    if phase == MIDDLE:
+        mate_weight = 0.08
+        if chess_board.players[WHITE].checked or chess_board.players[BLACK].checked:
+            mate_weight = 0.10
+    
+    if phase == LATE:
+        mate_weight = 0.10
+        if chess_board.players[WHITE].checked or chess_board.players[BLACK].checked:
+            mate_weight = 0.20
+
+    # Classical Weight
+    # The dominant signal throughout that anchors the evaluation in fundamental chess principles, 
+    # but tapers to allow model/mate signals to trigger favorable moves in critical moments.
+    #
+    # Typical weights may look something like the following:
+    # EARLY WEIGHTS: classical (.70 - .80), model (.20 - .30), mate_model (0.0)
+    # MIDDLE WEIGHTS: classical (.78 - .80), model (.12), mate_model (.08 - .10)
+    # LATE WEIGHTS: classical (.70 - .80), model (.10), mate_model (.10 - .20)
+
+    classical_weight = 1 - model_weight - mate_weight
+
+    score = classical_weight * classical + model_weight * model_scaled + mate_weight * mate_scaled
 
     if perspective_color == BLACK:
         score = -score
@@ -1278,14 +1330,14 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
             if see < 0:
                 if forcing:
-                    # Still bad locally, but checks/discovered checks get a lot more leeway
-                    score -= 4 + 0.35 * abs(see)
+                    # Still bad locally, but checks/discovered checks get more leeway
+                    score -= 6.0 + 0.35 * abs(see)
                 else:
                     # Non-forcing losing capture should drop hard
                     score -= 6.0 + 1.00 * abs(see)
             elif see == 0:
                 if forcing:
-                    score += 1.10
+                    score += 1.00
                 else:
                     score += 0.75
             else:
@@ -1306,7 +1358,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # 3. Checks
     if forcing:
-        score += 0.6
+        score += 0.2
 
     # 4. Castling
     if piece.color == WHITE and piece.name == "K":
@@ -1402,6 +1454,10 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             to_attackers, to_defenders = _square_pressure(board, move, piece.color)
             if to_attackers['count'] > to_defenders['count']:
                 score -= 1.5 * (piece_val - victim_val)
+
+    # 10. Early queen movement penalty
+    if piece.name == "Q" and len(getattr(board, "actions", [])) <= 8:
+        score -= 1.0
 
     return score
 
@@ -2076,7 +2132,9 @@ def main():
                 if black_win == "1":
                     black_wins += 1
 
-            print(f"GAME {game} COMPLETE, {COLOR[turn]} WINS: TIME: {game_time}  NUMBER OF MOVES: {num_moves}  NUMBER OF CASTLES: {num_castles}  NUMBER OF PROMOTIONS: {num_promo}")
+            result = f"{white_win}-{black_win}"
+
+            print(f"GAME {game} COMPLETE\nRESULT: {result}\nTIME: {game_time}\nNUMBER OF MOVES: {num_moves}\nNUMBER OF CASTLES: {num_castles}\nNUMBER OF PROMOTIONS: {num_promo}")
 
             # Load PGN
             path = export_game_to_pgn(chess_board, output_path=f"data/bot_games/{MODEL_NAME}/{depth}", model_path=MODEL_PATH, result=f"{white_win}-{black_win}")
