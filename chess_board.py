@@ -145,7 +145,7 @@ class ChessBoard:
     
     # search opponent's pressure map for a pressure at location
     def _is_square_attacked(self, location: str, opp_color: str) -> bool:
-        return self.pressure_map[opp_color].get(location, 0) > 0
+        return self.pressure_map[opp_color].get(location, {}).get("count", 0) > 0
 
     def _update_tiles(self) -> None:
         self._sync_board()
@@ -319,7 +319,7 @@ class ChessBoard:
 
         king.check = False
 
-        if self.pressure_map[opp_color].get(king_location, 0) > 0:
+        if self.pressure_map[opp_color].get(king_location, {}).get("count", 0) > 0:
             king.check = True
             return True
 
@@ -427,7 +427,7 @@ class ChessBoard:
                 opp_color = BLACK if color == WHITE else WHITE
 
                 # cannot castle out of check
-                if self.pressure_map[opp_color].get(from_sq, 0) > 0:
+                if self.pressure_map[opp_color].get(from_sq, {}).get("count", 0) > 0:
                     return False
 
                 transit_sq = {
@@ -438,7 +438,7 @@ class ChessBoard:
                 }[move]
 
                 # cannot castle through check
-                if self.pressure_map[opp_color].get(transit_sq, 0) > 0:
+                if self.pressure_map[opp_color].get(transit_sq, {}).get("count", 0) > 0:
                     return False
 
         snap = self._snapshot_state()
@@ -586,7 +586,13 @@ class ChessBoard:
     def _build_pressure_map(self, color: str) -> dict[str, int]:
         # Initialize all 64 squares to 0 pressure
         pressure = {
-            f"{col}{row}": 0
+            f"{col}{row}": 
+            {
+                "count": 0,
+                "total_cost": 0.0,
+                "min_cost": None,
+                "costs": []
+            }
             for row in ROWS
             for col in COLUMNS
         }
@@ -601,13 +607,19 @@ class ChessBoard:
                         nc = col + dc
                         nr = row + 1
                         if 97 <= nc <= 104 and 1 <= nr <= 8:
-                            pressure[f"{chr(nc)}{nr}"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["count"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["total_cost"] += piece.value
+                            pressure[f"{chr(nc)}{nr}"]["costs"].append(piece.value)
+                            pressure[f"{chr(nc)}{nr}"]["min_cost"] = min(pressure[f"{chr(nc)}{nr}"]["min_cost"], piece.value) if pressure[f"{chr(nc)}{nr}"]["min_cost"] is not None else piece.value
                 else:
                     for dc in (-1, 1):
                         nc = col + dc
                         nr = row - 1
                         if 97 <= nc <= 104 and 1 <= nr <= 8:
-                            pressure[f"{chr(nc)}{nr}"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["count"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["total_cost"] += piece.value
+                            pressure[f"{chr(nc)}{nr}"]["costs"].append(piece.value)
+                            pressure[f"{chr(nc)}{nr}"]["min_cost"] = min(pressure[f"{chr(nc)}{nr}"]["min_cost"], piece.value) if pressure[f"{chr(nc)}{nr}"]["min_cost"] is not None else piece.value
 
             elif piece.name == "K":
                 for dc in (-1, 0, 1):
@@ -617,11 +629,17 @@ class ChessBoard:
                         nc = col + dc
                         nr = row + dr
                         if 97 <= nc <= 104 and 1 <= nr <= 8:
-                            pressure[f"{chr(nc)}{nr}"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["count"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["total_cost"] += 1
+                            pressure[f"{chr(nc)}{nr}"]["costs"].append(1)
+                            pressure[f"{chr(nc)}{nr}"]["min_cost"] = min(pressure[f"{chr(nc)}{nr}"]["min_cost"], 1) if pressure[f"{chr(nc)}{nr}"]["min_cost"] is not None else 1
 
             else:
                 for sq in piece.moves:
-                    pressure[sq] += 1
+                    pressure[sq]["count"] += 1
+                    pressure[sq]["total_cost"] += piece.value
+                    pressure[sq]["costs"].append(piece.value)
+                    pressure[sq]["min_cost"] = min(pressure[sq]["min_cost"], piece.value) if pressure[sq]["min_cost"] is not None else piece.value
 
         return pressure
 

@@ -578,9 +578,9 @@ def _rook_on_open_file(chess_board, color) -> float:
 
 def _square_pressure(board, square: str, color: str) -> tuple[int, int]:
     opp = BLACK if color == WHITE else WHITE
-    attackers = board.pressure_map[opp].get(square, 0)
-    defenders = board.pressure_map[color].get(square, 0)
-    return attackers, defenders
+    attack_pressure = board.pressure_map[opp].get(square, {"count": 0, "weight": 0.0, "total_cost": [], "min_cost": 0.0})
+    defend_pressure = board.pressure_map[color].get(square, {"count": 0, "weight": 0.0, "total_cost": [], "min_cost": 0.0})
+    return attack_pressure, defend_pressure
 
 
 def _should_extend(piece, move, chess_board):
@@ -640,14 +640,14 @@ def _hanging_pieces(chess_board, color: str) -> float:
     for piece in chess_board.players[color].pieces:
         if piece.name == "K":
             continue
-        attackers, defenders = _square_pressure(chess_board, piece.location, color)
-        if attackers == 0:
+        attack_pressure, defend_pressure = _square_pressure(chess_board, piece.location, color)
+        if attack_pressure['count'] == 0:
             continue
 
         piece_weight = PIECE_VALUES[piece.name]
-        if defenders == 0:
+        if defend_pressure['count'] == 0:
             score -= EVAL_PARAMS.hanging_undefended_weight * piece_weight
-        elif attackers > defenders:
+        elif attack_pressure['count'] > defend_pressure['count']:
             score -= EVAL_PARAMS.hanging_outnumbered_weight * piece_weight
 
     return score
@@ -721,7 +721,7 @@ def _development_score(chess_board, color: str) -> float:
         if tile and tile.piece and tile.piece.color == color and tile.piece.name == "P":
             score += 0.2
             atk, dfn = _square_pressure(chess_board, sq, color)
-            if dfn >= atk:
+            if dfn['count'] >= atk['count']:
                 score += 0.08
 
     # Penalize early unsupported flank pawn pushes.
@@ -771,14 +771,14 @@ def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, reper
     return None
 
 
-def evaluate(chess_board, color, p=None) -> float:
+def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
 
     if p is None:
         p = EVAL_PARAMS
 
     model_score = 0.0
     if model is not None and torch is not None and board_to_tensor is not None:
-        tensor = board_to_tensor(chess_board, turn=color)
+        tensor = board_to_tensor(chess_board, turn=turn_to_move)
         x = torch.tensor(tensor).unsqueeze(0).float()
         with torch.no_grad():
             model_score = model(x).item()
@@ -836,7 +836,7 @@ def evaluate(chess_board, color, p=None) -> float:
 
     score = model_weight * model_scaled + classical_weight * classical
 
-    if color == BLACK:
+    if perspective_color == BLACK:
         score = -score
 
     return score
@@ -1008,19 +1008,20 @@ def _is_quiet_backtrack(board, piece, move: str) -> bool:
 
 def _see(board, square: str, color: str, captured_val: float = 0.0) -> float:
     """
-    Static Exchange Evaluation (SEE).
+    Cost-ladder Static Exchange Evaluation (SEE).
+    Assumes the side `color` has just moved a piece
+    onto `square`.
 
-    Simulates the full capture sequence on `square` assuming `color` is
-    the side that just moved a piece there, and returns the net material
-    gain (positive = profitable for `color`, negative = losing).
+    Returns a net score from `color`'s perspective:
+      + positive  -> favorable exchange / favorable retained control
+      + negative  -> bad exchange / likely tactical loss
 
-    Uses the cheapest-attacker heuristic: each side always recaptures
-    with its least valuable piece.  This is an approximation — it ignores
-    pins and discovered attacks — but it is fast (no board simulation) and
-    accurate enough to filter clearly losing moves at order time.
+    Structure of the score:
+      1) material exchange result from alternating cheapest captures
+      2) retained-square-control bonus after the exchange sequence
 
-    Example: White bishop moves to d2, Black queen on a5 can take for free.
-      _see(board, 'd2', WHITE) → roughly -3  (White loses a bishop)
+    `captured_val` is the value already won by landing on the square
+    (e.g. taking a pawn = 1, quiet move = 0).
     """
     opp = BLACK if color == WHITE else WHITE
 
@@ -1028,29 +1029,83 @@ def _see(board, square: str, color: str, captured_val: float = 0.0) -> float:
     if tile is None or tile.piece is None:
         return captured_val
 
-    target_val = PIECE_VALUES[tile.piece.name]
+    landed_piece = tile.piece
+    landed_cost = PIECE_VALUES[landed_piece.name]
 
-    cheapest_val = float('inf')
-    for p in board.players[opp].pieces:
-        if square in p.moves and p.name != 'K':
-            val = PIECE_VALUES[p.name]
-            if val < cheapest_val:
-                cheapest_val = val
+    attack_pressure, defend_pressure = _square_pressure(board, square, color)
 
-    if cheapest_val == float('inf'):
-        return captured_val
+    # Opponent attackers available to capture the landed piece
+    opp_costs = sorted(attack_pressure.get("costs", []))
 
-    recapture_val = float('inf')
-    for p in board.players[color].pieces:
-        if p.location != square and square in p.moves and p.name != 'K':
-            val = PIECE_VALUES[p.name]
-            if val < recapture_val:
-                recapture_val = val
+    # Friendly defenders available to recapture AFTER the landed piece is taken.
+    # Remove the landed piece itself once from the defender list if present.
+    my_costs = list(defend_pressure.get("costs", []))
+    removed_landed = False
+    filtered_my_costs = []
+    for c in sorted(my_costs):
+        if not removed_landed and c == landed_cost:
+            removed_landed = True
+            continue
+        filtered_my_costs.append(c)
+    my_costs = filtered_my_costs
 
-    if recapture_val == float('inf'):
-        return captured_val - target_val
+    # No opponent capture exists: square is tactically safe.
+    if not opp_costs:
+        reserve_edge = sum(my_costs) - sum(opp_costs)
+        return captured_val + 0.08 * reserve_edge
 
-    return captured_val + cheapest_val - target_val
+    gain = captured_val
+    current_target_cost = landed_cost
+    side_to_act = opp  # opponent gets first recapture chance
+    i_opp = 0
+    i_me = 0
+
+    while True:
+        if side_to_act == opp:
+            if i_opp >= len(opp_costs):
+                break
+
+            # Opponent captures our current target
+            gain -= current_target_cost
+
+            # Their capturing piece becomes the new target for us
+            current_target_cost = opp_costs[i_opp]
+            i_opp += 1
+            side_to_act = color
+
+        else:
+            if i_me >= len(my_costs):
+                break
+
+            # We recapture opponent's current target
+            gain += current_target_cost
+
+            # Our recapturing piece becomes the new target for them
+            current_target_cost = my_costs[i_me]
+            i_me += 1
+            side_to_act = opp
+
+    # Residual square-control / reserve signal after the exchange ladder
+    remaining_opp = opp_costs[i_opp:]
+    remaining_me = my_costs[i_me:]
+
+    remaining_me_total = sum(remaining_me)
+    remaining_opp_total = sum(remaining_opp)
+
+    remaining_me_min = remaining_me[0] if remaining_me else float("inf")
+    remaining_opp_min = remaining_opp[0] if remaining_opp else float("inf")
+
+    reserve_edge = remaining_me_total - remaining_opp_total
+    cheap_control_edge = (
+        (0.0 if remaining_opp_min == float("inf") else remaining_opp_min)
+        - (0.0 if remaining_me_min == float("inf") else remaining_me_min)
+    )
+
+    # Material stays dominant. Reserve/control are secondary tie-breakers.
+    gain += 0.08 * reserve_edge
+    gain += 0.12 * cheap_control_edge
+
+    return gain
 
 
 def _passes_opening_sanity(board, piece, move: str) -> bool:
@@ -1104,7 +1159,7 @@ def _passes_opening_sanity(board, piece, move: str) -> bool:
     if in_opening:
         # Avoid moving into obvious pressure without compensation (count-based fallback).
         to_attackers, to_defenders = _square_pressure(board, move, piece.color)
-        if to_attackers > to_defenders + 1 and not is_capture:
+        if to_attackers['count'] > to_defenders['count'] + 1 and not is_capture:
             return False
 
     return True
@@ -1198,6 +1253,10 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     else:
         captured_val = 0.0
 
+    # Checks and discovered checks are very forcing, so we want to give them more leeway in move ordering.
+    # Currently using a cheap static proxy for whether the move could plausibly give check.
+    forcing = _could_plausibly_give_check(board, piece, move)
+
     # 1. Captures: strong MVV-LVA
     if is_capture:
         see = 0.0
@@ -1218,14 +1277,22 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             see = _see(board, move, captured_val=captured_val, color=mover)
 
             if see < 0:
-                # Losing capture, push it down hard
-                score -= 6.0 + 1.00 * abs(see)
+                if forcing:
+                    # Still bad locally, but checks/discovered checks get a lot more leeway
+                    score -= 4 + 0.35 * abs(see)
+                else:
+                    # Non-forcing losing capture should drop hard
+                    score -= 6.0 + 1.00 * abs(see)
             elif see == 0:
-                # Trade works out evenly
-                score += 0.75
+                if forcing:
+                    score += 1.10
+                else:
+                    score += 0.75
             else:
-                # Good capture, especially if tactically clean
-                score += 1.50 + 0.35 * min(see, 5)
+                if forcing:
+                    score += 2.00 + 0.45 * min(see, 5)
+                else:
+                    score += 1.50 + 0.35 * min(see, 5)
 
         finally:
             board._restore_state(snap)
@@ -1238,7 +1305,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         score += 7.0
 
     # 3. Checks
-    if _could_plausibly_give_check(board, piece, move):
+    if forcing:
         score += 0.6
 
     # 4. Castling
@@ -1281,10 +1348,19 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     if _is_quiet_backtrack(board, piece, move):
         score -= 2.0
 
-    # 7.5. penalize moving the same piece back to back in late game
+    # 7.5. Penalize moving the same piece back to back in late game
     if color is not None and len(board.players[color].actions) > 2 and LATE == game_phase(board):
-        if board.players[color].actions[-1].piece_id == piece.id:
+        # logic change.. 
+        # while instead of if.. 
+        # keep penalizing if the same piece is moved multiple times in a row
+        # NOTE This may not have a strong impact as it is triggered in end game, 
+        # where the candidate cap will likely capture all moves regardless of score. 
+        i = -1
+        while board.players[color].actions[i].piece_id == piece.id: 
             score -= 0.5
+            i -= 1
+            if i == -5:
+                break
 
     # 8. Quiet move ordering
     if is_quiet:
@@ -1324,7 +1400,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         victim_val = PIECE_VALUES[target_tile.piece.name]
         if piece_val > victim_val:
             to_attackers, to_defenders = _square_pressure(board, move, piece.color)
-            if to_attackers > to_defenders:
+            if to_attackers['count'] > to_defenders['count']:
                 score -= 1.5 * (piece_val - victim_val)
 
     return score
@@ -1337,12 +1413,12 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
     Search only captures from noisy positions.
     """
     if deadline is not None and time.time() >= deadline:
-        return evaluate(chess_board, root_color)
+        return evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
 
     maximizing = (turn == root_color)
     next_turn = BLACK if turn == WHITE else WHITE
 
-    stand_pat = evaluate(chess_board, root_color)
+    stand_pat = evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
 
     # Stand-pat pruning
     if maximizing:
@@ -1445,7 +1521,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
     # Time cutoff check 
     if deadline is not None and time.time() >= deadline:
-        return evaluate(chess_board, root_color)
+        return evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
 
     # 1. TERMINAL CHECK — FIRST
     terminal = evaluate_terminal(chess_board, turn, root_color, depth)
@@ -1982,6 +2058,7 @@ def main():
 
             game_time = fmt_time(game_end_time - game_start_time)
             num_moves = len(chess_board.actions)
+            total_moves += num_moves
             num_castles = 0
             for action in chess_board.actions:
                 if action.castle != None:
@@ -2009,10 +2086,9 @@ def main():
         end_time = time.time()
         total_time = fmt_time(end_time - start_time)
         avg_time = fmt_time((end_time - start_time)/games)
-        total_moves += num_moves
         avg_num_moves = total_moves/(game+1)
 
-        print(f"{games} GAME EVAL COMPLETE\nWINS:  WHITE: {white_wins}  BLACK: {black_wins}  \nTIME: {total_time}  AVG GAME TIME {avg_time}  \nNUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  \nNUMBER OF CASTLES: {num_castles}   NUMBER OF PROMOTIONS: {num_promo}")
+        print(f"{games} GAME EVAL COMPLETE\nWINS:  WHITE: {white_wins}  BLACK: {black_wins}  \nTIME: {total_time}  AVG GAME TIME {avg_time}  \nNUMBER OF MOVES: {num_moves} AVERAGE NUMBER OF MOVES: {avg_num_moves}  \nNUMBER OF CASTLES: {total_castles}   NUMBER OF PROMOTIONS: {total_promotions}")
     
     except ValueError as e:
         print(f"Input parse failed:\n{e}")

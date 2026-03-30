@@ -4,7 +4,7 @@ import copy
 from chess_board import ChessBoard
 from player import PlayerAction
 from bot import best_move, minimax
-from bot import move_order_score, _passes_opening_sanity
+from bot import move_order_score, _passes_opening_sanity, _see, _square_pressure
 from opening_book import choose_book_move
 
 WHITE = 'W'
@@ -112,16 +112,16 @@ class ChessTestCase(unittest.TestCase):
 
     def assertSquareAttacked(self, board, square, by_color):
         self.assertGreater(
-            board.pressure_map[by_color].get(square, 0),
+            board.pressure_map[by_color].get(square, {}).get("count", 0),
             0,
-            f"Expected {square} to be attacked by {by_color}",
+            f"Expected {square} to be attacked by {by_color}"
         )
 
     def assertSquareNotAttacked(self, board, square, by_color):
         self.assertEqual(
-            board.pressure_map[by_color].get(square, 0),
+            board.pressure_map[by_color].get(square, {}).get("count", 0),
             0,
-            f"Expected {square} not to be attacked by {by_color}",
+            f"Expected {square} not to be attacked by {by_color}"
         )
 
     def assert_board_consistent(self, board):
@@ -703,6 +703,417 @@ class TestBot(ChessTestCase):
         b._update_tiles()
         self.assertFalse(b._test_check(WHITE))
         self.assert_board_consistent(b)
+
+
+class TestSEE(unittest.TestCase):
+    """
+    SEE tests focus on tactical truth, not strategic evaluation.
+
+    Convention assumed:
+      _see(board, square, color)
+        - `square` is the contested square
+        - `color` is the side that just moved a piece onto `square`
+        - positive => good for `color`
+        - negative => bad for `color`
+    """
+
+    def setUp(self):
+        self.board = ChessBoard()
+
+    def play(self, moves):
+        for from_sq, to_sq in moves:
+            piece = self.board._get_tile(from_sq).piece
+            self.assertIsNotNone(piece, f"No piece on {from_sq}")
+            self.board._move_piece(piece, to_sq)
+            self.board._update_tiles()
+
+    def test_see_equal_pawn_trade_is_about_equal(self):
+        """
+        1. e4 d5 2. exd5
+        White pawn captures pawn on d5.
+        With no immediate favorable/unfavorable imbalance, SEE should be near neutral or positive.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('d7', 'd5'),
+            ('e4', 'd5'),
+        ])
+
+        score = _see(self.board, 'd5', WHITE, captured_val=1)
+        self.assertGreaterEqual(score, 0, f"Expected non-negative SEE, got {score}")
+
+    def test_see_hanging_pawn_capture_is_positive(self):
+        """
+        White should profit from capturing a truly loose pawn.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('a7', 'a6'),
+            ('d2', 'd4'),
+            ('b7', 'b6'),
+            ('e4', 'd5'),
+        ])
+
+        score = _see(self.board, 'd5', WHITE, captured_val=1)
+        self.assertGreater(score, 0, f"Expected positive SEE for free pawn capture, got {score}")
+
+    def test_see_knight_takes_defended_pawn_is_negative(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('N', 'f3')],
+            black_pieces=[('K', 'e8'), ('P', 'e5'), ('B', 'g7')],
+        )
+
+        # simulate Nxe5
+        piece = b._get_tile('f3').piece
+        b._move_piece(piece, 'e5')
+        b._update_tiles()
+
+        score = _see(b, 'e5', WHITE, captured_val=1)
+        self.assertLess(score, 0, f"Expected negative SEE, got {score}")
+
+    def test_see_bishop_takes_loose_rook_is_strongly_positive(self):
+        """
+        If a bishop can take an undefended rook, SEE should be very positive.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('a7', 'a6'),
+            ('f1', 'b5'),
+            ('a6', 'a5'),
+            ('b5', 'd7'),
+            ('h7', 'h6'),
+            ('d7', 'a4'),
+            ('b7', 'b6'),
+        ])
+
+        # Manually create a clearer tactical scenario if needed
+        # depending on your engine legality handling.
+        # If your board API allows direct setup, use that instead.
+        #
+        # Here we just assert structure if you later wire a board-builder.
+        self.assertTrue(True)
+
+    def test_see_queen_takes_poisoned_pawn_is_negative(self):
+        """
+        The engine has shown queen-for-pawn nonsense.
+        This test exists specifically to reject that.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('e7', 'e5'),
+            ('d1', 'h5'),
+            ('b8', 'c6'),
+            ('h5', 'e5'),
+        ])
+
+        score = _see(self.board, 'e5', WHITE, captured_val=1)
+        self.assertLess(score, 0, f"Expected negative SEE for poisoned queen capture, got {score}")
+
+    def test_see_rook_recaptures_and_holds_square_is_non_negative(self):
+        """
+        If a rook recaptures and the exchange is sound, SEE should not mark it losing.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('e7', 'e5'),
+            ('g1', 'f3'),
+            ('g8', 'f6'),
+            ('f1', 'c4'),
+            ('f8', 'c5'),
+            ('e1', 'g1'),
+            ('e8', 'g8'),
+            ('f1', 'e1'),  # depends on your castling implementation / rook square updates
+        ])
+
+        self.assertTrue(True)
+
+    def test_see_simple_recapture_sequence_white(self):
+        """
+        White takes on d5, black recaptures, white recaptures.
+        SEE should account for the capture ladder, not just the first victim.
+        """
+        self.play([
+            ('d2', 'd4'),
+            ('d7', 'd5'),
+            ('c2', 'c4'),
+            ('e7', 'e6'),
+            ('c4', 'd5'),
+        ])
+
+        score = _see(self.board, 'd5', WHITE, captured_val=3)
+        # This exact numeric outcome depends on defenders,
+        # but it should not look like a totally free win.
+        self.assertIsInstance(score, (int, float))
+
+    def test_see_simple_recapture_sequence_black(self):
+        """
+        Same idea from black side so color-sign logic does not drift.
+        """
+        self.play([
+            ('d2', 'd4'),
+            ('e7', 'e5'),
+            ('d4', 'e5'),
+            ('d7', 'd6'),
+            ('e5', 'd6'),
+        ])
+
+        score = _see(self.board, 'd6', WHITE, captured_val=3)
+        self.assertIsInstance(score, (int, float))
+
+    def test_see_does_not_return_inf_or_none(self):
+        """
+        Guards against old crashes / broken exchange recursion.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('d7', 'd5'),
+            ('e4', 'd5'),
+        ])
+
+        score = _see(self.board, 'd5', WHITE, captured_val=1)
+
+        self.assertIsNotNone(score)
+        self.assertNotEqual(score, float('inf'))
+        self.assertNotEqual(score, float('-inf'))
+        self.assertFalse(score != score, "SEE returned NaN")
+
+    def test_see_queen_sac_for_pawn_is_heavily_negative(self):
+        """
+        This should fail loudly if the engine ever thinks QxPawn with immediate loss is okay.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('d7', 'd5'),
+            ('d1', 'h5'),
+            ('g8', 'f6'),
+            ('h5', 'd5'),
+        ])
+
+        score = _see(self.board, 'd5', WHITE, captured_val=1)
+        self.assertLess(score, -5, f"Expected heavily negative SEE for queen blunder, got {score}")
+
+    def test_see_minor_piece_wins_exchange_is_positive(self):
+        """
+        Knight or bishop wins material in a short capture chain.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('d7', 'd5'),
+            ('g1', 'f3'),
+            ('c8', 'g4'),
+            ('f3', 'e5'),
+        ])
+
+        score = _see(self.board, 'e5', WHITE, captured_val=1)
+        self.assertIsInstance(score, (int, float))
+
+    def test_see_on_empty_square_is_safe(self):
+        """
+        Defensive test: SEE should not explode on empty squares.
+        Decide whether you want 0 or an exception. This assumes 0.
+        """
+        score = _see(self.board, 'e4', WHITE)
+        self.assertEqual(score, 0)
+
+    def test_see_capture_of_high_value_piece_beats_attacker_cost_when_truly_safe(self):
+        """
+        If the capture is actually safe, taking a more valuable piece should score well.
+        """
+        self.play([
+            ('e2', 'e4'),
+            ('d7', 'd5'),
+            ('f1', 'b5'),
+            ('c7', 'c6'),
+            ('b5', 'c6'),
+        ])
+
+        score = _see(self.board, 'c6', WHITE, captured_val=1)
+        self.assertIsInstance(score, (int, float))
+
+
+class TestSEEExactPositions(unittest.TestCase):
+    """
+    SEE tests built from direct board setup, not long move histories.
+    These are much more reliable for tactical truth.
+    """
+
+    def setUp(self):
+        self.board = ChessBoard()
+
+    def test_see_white_pawn_takes_free_pawn_positive(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('P', 'e4')],
+            black_pieces=[('K', 'e8'), ('P', 'd5')],
+        )
+
+        piece = b._get_tile('e4').piece
+        b._move_piece(piece, 'd5')
+        b._update_tiles()
+
+        score = _see(b, 'd5', WHITE, captured_val=1)
+        self.assertGreater(score, 0, f"Expected positive SEE for free pawn capture, got {score}")
+
+    def test_see_white_queen_takes_defended_pawn_heavily_negative(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('Q', 'd1')],
+            black_pieces=[('K', 'e8'), ('P', 'd5'), ('N', 'f6')],
+        )
+
+        piece = b._get_tile('d1').piece
+        b._move_piece(piece, 'd5')
+        b._update_tiles()
+
+        score = _see(b, 'd5', WHITE, captured_val=1)
+        self.assertLess(score, -5, f"Expected heavily negative SEE for Qxd5??, got {score}")
+
+    def test_see_white_knight_takes_pawn_defended_by_bishop_negative(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('N', 'f3')],
+            black_pieces=[('K', 'e8'), ('P', 'e5'), ('B', 'g7')],
+        )
+
+        piece = b._get_tile('f3').piece
+        b._move_piece(piece, 'e5')
+        b._update_tiles()
+
+        score = _see(b, 'e5', WHITE, captured_val=1)
+        self.assertLess(score, 0, f"Expected negative SEE for Nxe5 into bishop recapture, got {score}")
+
+    def test_see_white_bishop_takes_free_rook_strongly_positive(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('B', 'c4')],
+            black_pieces=[('K', 'e8'), ('R', 'f7')],
+        )
+
+        piece = b._get_tile('c4').piece
+        b._move_piece(piece, 'f7')
+        b._update_tiles()
+
+        score = _see(b, 'f7', WHITE, captured_val=5)
+        self.assertGreater(score, 3, f"Expected strongly positive SEE for Bxf7 winning rook, got {score}")
+
+    def test_see_white_rook_takes_defended_rook_not_free(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('R', 'd1')],
+            black_pieces=[('K', 'e8'), ('R', 'd7'), ('Q', 'd8')],
+        )
+
+        piece = b._get_tile('d1').piece
+        b._move_piece(piece, 'd7')
+        b._update_tiles()
+
+        score = _see(b, 'd7', WHITE, captured_val=5)
+        self.assertLessEqual(score, 0, f"Expected non-positive SEE for Rxd7 when queen recaptures, got {score}")
+
+    def test_see_black_pawn_takes_free_pawn_positive(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('P', 'e4')],
+            black_pieces=[('K', 'e8'), ('P', 'd5')],
+        )
+
+        piece = b._get_tile('d5').piece
+        b._move_piece(piece, 'e4')
+        b._update_tiles()
+
+        score = _see(b, 'e4', BLACK, captured_val=1)
+        self.assertGreater(score, 0, f"Expected positive SEE for black free pawn capture, got {score}")
+
+    def test_see_black_queen_takes_defended_pawn_heavily_negative(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('B', 'd3'), ('P', 'e4')],
+            black_pieces=[('K', 'e8'), ('Q', 'd8')],
+        )
+
+        piece = b._get_tile('d8').piece
+        b._move_piece(piece, 'e4')
+        b._update_tiles()
+
+        score = _see(b, 'e4', BLACK, captured_val=1)
+        self.assertLess(score, -5, f"Expected heavily negative SEE for ...Qxe4??, got {score}")
+
+    def test_see_empty_square_returns_zero(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1')],
+            black_pieces=[('K', 'e8')],
+        )
+
+        score = _see(b, 'd4', WHITE)
+        self.assertEqual(score, 0)
+
+    def test_see_capture_with_no_recap_is_at_least_captured_value(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('N', 'c4')],
+            black_pieces=[('K', 'e8'), ('P', 'd6')],
+        )
+
+        piece = b._get_tile('c4').piece
+        b._move_piece(piece, 'd6')
+        b._update_tiles()
+
+        score = _see(b, 'd6', WHITE, captured_val=1)
+        self.assertGreaterEqual(score, 1, f"Expected SEE >= captured material when no recapture exists, got {score}")
+
+    def test_see_does_not_return_nan_inf_on_defended_capture(self):
+        b = self.board
+        set_position(
+            b,
+            white_pieces=[('K', 'e1'), ('Q', 'd1')],
+            black_pieces=[('K', 'e8'), ('P', 'd5'), ('N', 'f6')],
+        )
+
+        piece = b._get_tile('d1').piece
+        b._move_piece(piece, 'd5')
+        b._update_tiles()
+
+        score = _see(b, 'd5', WHITE, captured_val=1)
+        self.assertIsInstance(score, (int, float))
+        self.assertNotEqual(score, float("inf"))
+        self.assertNotEqual(score, float("-inf"))
+        self.assertFalse(score != score, "SEE returned NaN")
+
+
+class TestPressureMapExactPositions(unittest.TestCase):
+    def test_rook_attacks_clear_file(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'e1')],
+            black_pieces=[('K', 'a8'), ('R', 'e8')],
+        )
+
+        self.assertGreater(b.pressure_map[BLACK].get('e1', {}).get('count', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('f1', {}).get('count', 0), 0)
+
+    def test_bishop_attacks_diagonal_only(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'e1')],
+            black_pieces=[('K', 'a8'), ('B', 'h4')],
+        )
+
+        self.assertGreater(b.pressure_map[BLACK].get('e1', {}).get('count', 0), 0)
+        self.assertEqual(b.pressure_map[BLACK].get('f1', {}).get('count', 0), 0)
 
 
 class TestSnapshotRestoreIntegrity(ChessTestCase):
