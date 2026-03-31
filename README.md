@@ -154,4 +154,4 @@ If no checkpoint is found the engine falls back to the pure classical evaluation
 
 ## Requirements File
 
-See `requirements.txt` below (also generated alongside this README).
+See `requirements.txt` .
