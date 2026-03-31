@@ -1,0 +1,10 @@
+# Core ML / tensor
+torch>=2.0.0
+numpy>=1.24.0
+
+# PGN parsing and legal-move validation
+python-chess>=1.9.0
+
+# Standard library only — no extra install needed:
+#   copy, dataclasses, math, os, sys, time, random,
+#   json, pickle, argparse, datetime, unittest
