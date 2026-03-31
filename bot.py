@@ -803,7 +803,7 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
 
     mate_score = 0.0
     if phase != EARLY:
-        if model is not None and x is not None:
+        if mate_model is not None and x is not None:
             with torch.no_grad():
                 mate_score = mate_model(x).item()
 
@@ -1307,11 +1307,13 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
 
     # Checks and discovered checks are very forcing, so we want to give them more leeway in move ordering.
     # Currently using a cheap static proxy for whether the move could plausibly give check.
-    forcing = _could_plausibly_give_check(board, piece, move)
+    forcing = False
+    if _could_plausibly_give_check(board, piece, move):
+        forcing = _move_gives_check(board, piece, move)
+    see = 0.0
 
     # 1. Captures: strong MVV-LVA
     if is_capture:
-        see = 0.0
         snap = board._snapshot_state()
         try:
             board._move_piece(piece, move, simulate=True)
@@ -1329,22 +1331,13 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             see = _see(board, move, captured_val=captured_val, color=mover)
 
             if see < 0:
-                if forcing:
-                    # Still bad locally, but checks/discovered checks get more leeway
-                    score -= 6.0 + 0.35 * abs(see)
-                else:
-                    # Non-forcing losing capture should drop hard
-                    score -= 6.0 + 1.00 * abs(see)
+                score -= 8.0 + 1.25 * abs(see)
+                if piece.name == "Q":
+                    score -= 4.0
             elif see == 0:
-                if forcing:
-                    score += 1.00
-                else:
-                    score += 0.75
+                score += 0.25
             else:
-                if forcing:
-                    score += 2.00 + 0.45 * min(see, 5)
-                else:
-                    score += 1.50 + 0.35 * min(see, 5)
+                score += 1.25 + 0.30 * min(see, 5)
 
         finally:
             board._restore_state(snap)
@@ -1357,8 +1350,8 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         score += 7.0
 
     # 3. Checks
-    if forcing:
-        score += 0.2
+    if forcing and see >= 0:
+        score += 0.15
 
     # 4. Castling
     if piece.color == WHITE and piece.name == "K":
