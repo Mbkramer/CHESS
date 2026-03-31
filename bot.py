@@ -837,8 +837,8 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     classical += _repetition_penalty(chess_board, BLACK)
 
 
-    model_scaled = model_score * 5
-    model_scaled = max(min(model_scaled, 5), -5)
+    model_scaled = model_score * 2 # from 5 to 2
+    model_scaled = max(min(model_scaled, 2), -2)
 
     # Model weight 
     # model is strongest early (best for natural human openings, classical eval can misread piece activity)
@@ -861,8 +861,8 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     # classical eval can miss nuances (e.g. positional blunders), 
     # tapers as game becomes tactical (classical eval more reliable).
 
-    mate_scaled = mate_score * 5.0
-    mate_scaled = max(min(mate_scaled, 5.0), -5.0)
+    mate_scaled = mate_score * 2.0 # from 5 to 2
+    mate_scaled = max(min(mate_scaled, 2.0), -2.0)
 
     mate_weight = 0.0
     if phase == MIDDLE:
@@ -962,11 +962,38 @@ def _move_gives_check(board, piece, move) -> bool:
         board._move_piece(piece, move, simulate=True)
         board._sync_board()
 
-        # Raw move generation is enough for attack maps
         board.players[mover].update_moves(board, board.players[opp].actions)
         board.players[opp].update_moves(board, board.players[mover].actions)
+        board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
+        board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
 
         return board._test_check(opp)
+
+    except Exception:
+        return False
+    finally:
+        board._restore_state(snap)
+
+def _move_gives_mate(board, piece, move) -> bool:
+    mover = piece.color
+    opp = BLACK if mover == WHITE else WHITE
+
+    target_tile = board._get_tile(move)
+    if target_tile and target_tile.piece and target_tile.piece.name == "K":
+        return False
+
+    snap = board._snapshot_state()
+
+    try:
+        board._move_piece(piece, move, simulate=True)
+
+        # Opponent is now side to move. Build their legal state.
+        board._refresh_search_state_for_turn(opp)
+
+        return (
+            board.players[opp].checked and
+            len(board.players[opp].possible_moves) == 0
+        )
 
     except Exception:
         return False
@@ -1309,7 +1336,11 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     # Currently using a cheap static proxy for whether the move could plausibly give check.
     forcing = False
     if _could_plausibly_give_check(board, piece, move):
-        forcing = _move_gives_check(board, piece, move)
+        if _move_gives_check(board, piece, move):
+            forcing = True
+            if _move_gives_mate(board, piece, move):
+                return MATE_SCORE
+        
     see = 0.0
 
     # 1. Captures: strong MVV-LVA
