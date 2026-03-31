@@ -90,7 +90,7 @@ python bot.py
 python -m unittest test_chess.py -v
 ```
 
-### 5. Texel tuning (requires a PGN corpus) - NOTE: The this project does not include a large dataset of PGN chess games to train these neural networks. A strong resource is Lichness or Chess.com's public chess datasets that host massive datasets of games from varrying players. Load 40000 - 200000 games locally for the best --pgn model training experience. 
+### 5. Texel tuning (requires a PGN corpus)
 
 ```bash
 # First run — replay and cache positions, then tune
@@ -130,6 +130,7 @@ export CHESS_KILL_MODEL_PATH=check_points/my_kill_bot.pt   # used by tests
 ---
 
 ## Neural Networks
+**NOTE** - The this project does not include a large dataset of PGN chess games to train these neural networks. A strong resource is Lichness or Chess.com's public chess datasets that host massive datasets of games from varrying players. Load 40000 - 200000 games locally for the best --pgn model training experience. 
 
 Two separate `ChessNet` CNNs (3 conv layers + 3 FC layers, `tanh` output bounded `[-1, 1]`) are loaded at startup:
 
