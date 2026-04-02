@@ -1275,12 +1275,298 @@ class TestBotDecisionQuality(ChessTestCase):
         self.assertEqual((from_sq, to_sq), ("e2", "e4"))
 
 
-# Reuse these from the existing test file:
-# - WHITE
-# - BLACK
-# - ChessTestCase
-# - set_position
-# - make_move
+class TestEvaluateDiagnostics(ChessTestCase):
+    """
+    Diagnostic tests for the static evaluator.
+
+    These are not just pass/fail unit tests.
+    They also print a component breakdown so you can inspect:
+      - total eval
+      - classical
+      - raw model score
+      - model_scaled
+      - phase
+      - weights
+      - key classical subcomponents
+
+    Run with:
+        python3 -m unittest test_chess.TestEvaluateDiagnostics -v
+    """
+
+    def _eval_breakdown(self, board, color=WHITE):
+        import torch
+        from bot import (
+            evaluate,
+            evaluate_terminal,
+            game_phase,
+            EVAL_PARAMS,
+            model,
+            board_to_tensor,
+            WHITE,
+            BLACK,
+            EARLY,
+            MIDDLE,
+            _piece_value,
+            get_position_bonus,
+            _pawn_structure,
+            _mobility,
+            _king_safety,
+            _bishop_pair,
+            _rook_on_open_file,
+            _hanging_pieces,
+            _development_score,
+            _repetition_penalty,
+        )
+
+        p = EVAL_PARAMS
+
+        # --- raw model ---
+        model_score = 0.0
+        if model is not None and torch is not None and board_to_tensor is not None:
+            tensor = board_to_tensor(board, turn=color)
+            x = torch.tensor(tensor).unsqueeze(0).float()
+            with torch.no_grad():
+                model_score = model(x).item()
+
+        # --- classical material + PST ---
+        material_pst = 0.0
+        for piece in board.players[WHITE].pieces:
+            material_pst += _piece_value(piece.name, p) + get_position_bonus(piece, p)
+        for piece in board.players[BLACK].pieces:
+            material_pst -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
+
+        pawn_structure = _pawn_structure(board, WHITE) - _pawn_structure(board, BLACK)
+        mobility = _mobility(board)
+        king_safety = _king_safety(board, WHITE) - _king_safety(board, BLACK)
+        bishop_pair = _bishop_pair(board, WHITE) - _bishop_pair(board, BLACK)
+        rook_files = _rook_on_open_file(board, WHITE) - _rook_on_open_file(board, BLACK)
+        hanging = _hanging_pieces(board, WHITE) - _hanging_pieces(board, BLACK)
+        development = _development_score(board, WHITE) - _development_score(board, BLACK)
+        repetition = -_repetition_penalty(board, WHITE) + _repetition_penalty(board, BLACK)
+
+        classical = (
+            material_pst
+            + pawn_structure
+            + mobility
+            + king_safety
+            + bishop_pair
+            + rook_files
+            + hanging
+            + development
+            + repetition
+        )
+
+        phase = game_phase(board)
+        model_scaled = max(min(model_score * 5, 3), -3)
+
+        ply_count = len(getattr(board, "actions", []))
+        if ply_count <= 10:
+            model_weight = 0.3
+        elif phase == EARLY:
+            model_weight = 0.2
+        elif phase == MIDDLE:
+            model_weight = 0.15
+        else:
+            model_weight = 0.1
+        classical_weight = 1 - model_weight
+
+        blended_white = model_weight * model_scaled + classical_weight * classical
+        total = blended_white if color == WHITE else -blended_white
+
+        return {
+            "color": color,
+            "phase": phase,
+            "ply_count": ply_count,
+            "total": total,
+            "white_pov_total": blended_white,
+            "classical": classical,
+            "material_pst": material_pst,
+            "pawn_structure": pawn_structure,
+            "mobility": mobility,
+            "king_safety": king_safety,
+            "bishop_pair": bishop_pair,
+            "rook_files": rook_files,
+            "hanging": hanging,
+            "development": development,
+            "repetition": repetition,
+            "model_score": model_score,
+            "model_scaled": model_scaled,
+            "model_weight": model_weight,
+            "classical_weight": classical_weight,
+            "terminal_white": evaluate_terminal(board, WHITE, WHITE, depth=0, repertoire_name="balanced"),
+            "terminal_black": evaluate_terminal(board, BLACK, WHITE, depth=0, repertoire_name="balanced"),
+            "evaluate_call": evaluate(board, color, turn_to_move=color),
+        }
+
+    def _print_breakdown(self, label, d):
+        print(f"\n=== {label} ===")
+        print(f"phase={d['phase']} ply_count={d['ply_count']} color={d['color']}")
+        print(f"evaluate(...)={d['evaluate_call']:.4f}")
+        print(f"total={d['total']:.4f} white_pov_total={d['white_pov_total']:.4f}")
+        print(f"classical={d['classical']:.4f}")
+        print(f"  material_pst={d['material_pst']:.4f}")
+        print(f"  pawn_structure={d['pawn_structure']:.4f}")
+        print(f"  mobility={d['mobility']:.4f}")
+        print(f"  king_safety={d['king_safety']:.4f}")
+        print(f"  bishop_pair={d['bishop_pair']:.4f}")
+        print(f"  rook_files={d['rook_files']:.4f}")
+        print(f"  hanging={d['hanging']:.4f}")
+        print(f"  development={d['development']:.4f}")
+        print(f"  repetition={d['repetition']:.4f}")
+        print(f"model_score={d['model_score']:.4f}")
+        print(f"model_scaled={d['model_scaled']:.4f}")
+        print(f"weights: model={d['model_weight']:.2f} classical={d['classical_weight']:.2f}")
+        print(f"terminal_white={d['terminal_white']} terminal_black={d['terminal_black']}")
+
+    def test_start_position_is_near_equal(self):
+        b = ChessBoard()
+        d = self._eval_breakdown(b, WHITE)
+        self._print_breakdown("start_position", d)
+
+        self.assertAlmostEqual(d["evaluate_call"], 0.0, delta=1.0)
+
+    def test_white_extra_queen_is_strongly_positive(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'g1'), ('Q', 'd4'), ('R', 'a1')],
+            black_pieces=[('K', 'g8'), ('R', 'a8')],
+        )
+        d = self._eval_breakdown(b, WHITE)
+        self._print_breakdown("white_extra_queen", d)
+
+        self.assertGreater(d["classical"], 7.0)
+        self.assertGreater(d["evaluate_call"], 5.0)
+
+    def test_black_extra_queen_is_strongly_negative_for_white(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'g1'), ('R', 'a1')],
+            black_pieces=[('K', 'g8'), ('Q', 'd5'), ('R', 'a8')],
+        )
+        d = self._eval_breakdown(b, WHITE)
+        self._print_breakdown("black_extra_queen", d)
+
+        self.assertLess(d["classical"], -7.0)
+        self.assertLess(d["evaluate_call"], -5.0)
+
+    def test_good_trade_position_beats_bad_trade_position(self):
+        # Good trade: white wins a rook for a bishop-type imbalance
+        good = ChessBoard()
+        set_position(
+            good,
+            white_pieces=[('K', 'g1'), ('B', 'd3'), ('R', 'a1')],
+            black_pieces=[('K', 'g8'), ('R', 'e6')],
+        )
+
+        # Bad trade: white down exchange / queen pressure against king
+        bad = ChessBoard()
+        set_position(
+            bad,
+            white_pieces=[('K', 'g1'), ('B', 'd3')],
+            black_pieces=[('K', 'g8'), ('R', 'e6'), ('Q', 'h4')],
+        )
+
+        d_good = self._eval_breakdown(good, WHITE)
+        d_bad = self._eval_breakdown(bad, WHITE)
+
+        self._print_breakdown("good_trade_shell", d_good)
+        self._print_breakdown("bad_trade_shell", d_bad)
+
+        self.assertGreater(d_good["evaluate_call"], d_bad["evaluate_call"])
+
+    def test_castled_king_scores_better_than_exposed_king(self):
+        safe = ChessBoard()
+        set_position(
+            safe,
+            white_pieces=[
+                ('K', 'g1'), ('R', 'f1'),
+                ('P', 'f2'), ('P', 'g2'), ('P', 'h2'),
+                ('Q', 'd1')
+            ],
+            black_pieces=[('K', 'g8'), ('Q', 'd8')]
+        )
+
+        exposed = ChessBoard()
+        set_position(
+            exposed,
+            white_pieces=[
+                ('K', 'e1'),
+                ('P', 'a2'), ('P', 'b2'), ('P', 'c2'),
+                ('Q', 'd1')
+            ],
+            black_pieces=[('K', 'g8'), ('Q', 'h4')]
+        )
+
+        d_safe = self._eval_breakdown(safe, WHITE)
+        d_exposed = self._eval_breakdown(exposed, WHITE)
+
+        self._print_breakdown("safe_king", d_safe)
+        self._print_breakdown("exposed_king", d_exposed)
+
+        self.assertGreater(d_safe["king_safety"], d_exposed["king_safety"])
+        self.assertGreater(d_safe["evaluate_call"], d_exposed["evaluate_call"])
+
+    def test_passed_pawn_position_beats_blocked_isolated_pawn(self):
+        passed = ChessBoard()
+        set_position(
+            passed,
+            white_pieces=[('K', 'g1'), ('P', 'd6')],
+            black_pieces=[('K', 'g8')]
+        )
+
+        weak = ChessBoard()
+        set_position(
+            weak,
+            white_pieces=[('K', 'g1'), ('P', 'a2')],
+            black_pieces=[('K', 'g8')]
+        )
+
+        d_passed = self._eval_breakdown(passed, WHITE)
+        d_weak = self._eval_breakdown(weak, WHITE)
+
+        self._print_breakdown("passed_pawn", d_passed)
+        self._print_breakdown("weak_pawn", d_weak)
+
+        self.assertGreater(d_passed["pawn_structure"], d_weak["pawn_structure"])
+        self.assertGreater(d_passed["evaluate_call"], d_weak["evaluate_call"])
+
+    def test_mate_is_terminal_not_static(self):
+        # Black is mated: white queen on f7, white king supports, black king trapped
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'h6'), ('Q', 'f7')],
+            black_pieces=[('K', 'h8')],
+        )
+
+        d = self._eval_breakdown(b, WHITE)
+        self._print_breakdown("terminal_mate_position", d)
+
+        # Static eval should be winning, but not mate-score huge
+        self.assertGreater(d["evaluate_call"], 5.0)
+
+        # Terminal eval should be decisive for black-to-move
+        term = d["terminal_black"]
+        self.assertIsNotNone(term)
+        self.assertGreater(term, 90000)
+
+    def test_eval_is_antisymmetric_by_color(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[('K', 'g1'), ('Q', 'd4')],
+            black_pieces=[('K', 'g8')],
+        )
+
+        w = self._eval_breakdown(b, WHITE)
+        bl = self._eval_breakdown(b, BLACK)
+
+        self._print_breakdown("antisymmetry_white", w)
+        self._print_breakdown("antisymmetry_black", bl)
+
+        self.assertAlmostEqual(w["evaluate_call"], -bl["evaluate_call"], delta=0.05)
 
 
 class TestKillBotMatePatterns(ChessTestCase):

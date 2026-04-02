@@ -1,5 +1,6 @@
 import os
 import time
+from chess_board import ChessBoard
 from opening_book import choose_book_move, book_move_bonus
 
 try:
@@ -9,19 +10,36 @@ except Exception:
 
 try:
     from model import load_model
-    from tensor import board_to_tensor
-except Exception:
+    print("Imported load_model successfully")
+except Exception as e:
     load_model = None
+    print(f"Failed importing load_model from model.py: {e}")
+
+try:
+    from tensor import board_to_tensor
+    print("Imported board_to_tensor successfully")
+except Exception as e:
     board_to_tensor = None
+    print(f"Failed importing board_to_tensor from tensor.py: {e}")
 
 MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v5.pt")
 MODEL_NAME = "pgn_2000_2400_v5.pt"
 
-MATE_BOT_PATH = os.environ.get("MATE_BOT_PATH", "check_points/kill_bot_v1.pt")
-MATE_BOT_NAME = "kill_bot_v1.pt"
+MATE_BOT_PATH = os.environ.get("MATE_BOT_PATH", "check_points/kill_bot_v2.pt")
+MATE_BOT_NAME = "kill_bot_v2.pt"
+
+print(f"MODEL_PATH={MODEL_PATH}")
+
+print(f"load_model available? {load_model is not None}")
+print(f"board_to_tensor available? {board_to_tensor is not None}")
+print(f"path exists? {os.path.exists(MODEL_PATH)}")
 
 model = None
-if load_model is not None and os.path.exists(MODEL_PATH):
+if load_model is None:
+    print("Model loader import failed.")
+elif not os.path.exists(MODEL_PATH):
+    print(f"Model file not found: {MODEL_PATH}")
+else:
     try:
         model = load_model(MODEL_PATH)
         model.eval()
@@ -30,8 +48,18 @@ if load_model is not None and os.path.exists(MODEL_PATH):
         print(f"Warning: failed to load bot model from {MODEL_PATH}: {e}")
         model = None
 
+print(f"MATE_BOT_PATH={MATE_BOT_PATH}")
+
+print(f"load_model available? {load_model is not None}")
+print(f"board_to_tensor available? {board_to_tensor is not None}")
+print(f"path exists? {os.path.exists(MATE_BOT_PATH)}")
+
 mate_model = None
-if load_model is not None and os.path.exists(MATE_BOT_PATH):
+if load_model is None:
+    print("Model loader import failed.")
+elif not os.path.exists(MATE_BOT_PATH):
+    print(f"Model file not found: {MATE_BOT_PATH}")
+else:
     try:
         mate_model = load_model(MATE_BOT_PATH)
         mate_model.eval()
@@ -772,15 +800,16 @@ def _development_score(chess_board, color: str) -> float:
 
 # --- Evaluatations -----------------------------------------------------------
 
-def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, repertoire_name="balanced"):
-    legal_moves = chess_board.players[turn].possible_moves
-    in_check = chess_board.players[turn].checked
-
-    if len(legal_moves) == 0:
-        if in_check:
-            return -MATE_SCORE + depth if turn == root_color else MATE_SCORE - depth
-        return 0.0
-
+def evaluate_terminal(board, turn, root_color, depth):
+    if len(board.players[turn].possible_moves) == 0:
+        if board.players[turn].checked:
+            # turn is mated
+            if turn == root_color:
+                return -MATE_SCORE + depth
+            else:
+                return MATE_SCORE - depth
+        else:
+            return 0.0
     return None
 
 
@@ -788,6 +817,12 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
 
     if p is None:
         p = EVAL_PARAMS
+
+    if chess_board.players[WHITE].mated:
+        return -MATE_SCORE if perspective_color == WHITE else MATE_SCORE
+
+    if chess_board.players[BLACK].mated:
+        return MATE_SCORE if perspective_color == WHITE else -MATE_SCORE
 
     phase = game_phase(chess_board)
 
@@ -837,8 +872,8 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     classical += _repetition_penalty(chess_board, BLACK)
 
 
-    model_scaled = model_score * 2 # from 5 to 2
-    model_scaled = max(min(model_scaled, 2), -2)
+    model_scaled = model_score * 3
+    model_scaled = max(min(model_scaled, 3), -3)
 
     # Model weight 
     # model is strongest early (best for natural human openings, classical eval can misread piece activity)
@@ -861,8 +896,8 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
     # classical eval can miss nuances (e.g. positional blunders), 
     # tapers as game becomes tactical (classical eval more reliable).
 
-    mate_scaled = mate_score * 2.0 # from 5 to 2
-    mate_scaled = max(min(mate_scaled, 2.0), -2.0)
+    mate_scaled = mate_score * 3
+    mate_scaled = max(min(mate_scaled, 3), -3)
 
     mate_weight = 0.0
     if phase == MIDDLE:
@@ -967,38 +1002,20 @@ def _move_gives_check(board, piece, move) -> bool:
         board.pressure_map[WHITE] = board._build_pressure_map(WHITE)
         board.pressure_map[BLACK] = board._build_pressure_map(BLACK)
 
-        return board._test_check(opp)
+        check = board._test_check(opp)
 
-    except Exception:
-        return False
-    finally:
-        board._restore_state(snap)
-
-def _move_gives_mate(board, piece, move) -> bool:
-    mover = piece.color
-    opp = BLACK if mover == WHITE else WHITE
-
-    target_tile = board._get_tile(move)
-    if target_tile and target_tile.piece and target_tile.piece.name == "K":
-        return False
-
-    snap = board._snapshot_state()
-
-    try:
-        board._move_piece(piece, move, simulate=True)
-
-        # Opponent is now side to move. Build their legal state.
-        board._refresh_search_state_for_turn(opp)
-
-        return (
+        check_mate = (
             board.players[opp].checked and
             len(board.players[opp].possible_moves) == 0
         )
 
+        return check, check_mate
+
     except Exception:
         return False
     finally:
         board._restore_state(snap)
+
 
 def _early_opening_safety_bonus(board, piece, move) -> float:
     """
@@ -1180,10 +1197,6 @@ def _see(board, square: str, color: str, captured_val: float = 0.0) -> float:
         - (0.0 if remaining_me_min == float("inf") else remaining_me_min)
     )
 
-    # Material stays dominant. Reserve/control are secondary tie-breakers.
-    gain += 0.08 * reserve_edge
-    gain += 0.12 * cheap_control_edge
-
     return gain
 
 
@@ -1336,10 +1349,14 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
     # Currently using a cheap static proxy for whether the move could plausibly give check.
     forcing = False
     if _could_plausibly_give_check(board, piece, move):
-        if _move_gives_check(board, piece, move):
+        check, check_mate = _move_gives_check(board, piece, move)
+
+        if check:
             forcing = True
-            if _move_gives_mate(board, piece, move):
-                return MATE_SCORE
+        
+        if check_mate:
+            return MATE_SCORE  # immediately prioritize known mates
+            
         
     see = 0.0
 
@@ -1925,14 +1942,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         root_cap = 14
 
     if len(candidate_moves) > root_cap and total_pieces > 10:
-        captures = [
-            m for m in candidate_moves
-            if chess_board._get_tile(m[1]) is not None
-            and chess_board._get_tile(m[1]).piece is not None
-            and chess_board._get_tile(m[1]).piece.color != m[0].color
-        ]
-        quiet = [m for m in candidate_moves if m not in captures]
-        candidate_moves = captures + quiet[:max(0, root_cap - len(captures))]
+        candidate_moves = candidate_moves[:root_cap]
 
     if debug >= 1:
         _debug_log(
@@ -1962,7 +1972,6 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
             chess_board._refresh_search_state_for_turn(next_turn)
 
             # Return mated opponent move immediately
-            opp_moves = _search_legal_moves(chess_board, next_turn, repertoire_name=repertoire_name)
             if len(chess_board.players[next_turn].possible_moves) == 0 and chess_board.players[next_turn].checked:
                 return (from_sq, move)
             
@@ -2031,8 +2040,8 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
 
 def main():
-    from chess_board import ChessBoard
-    import time
+
+    print(f"MODEL LOADED? {model is not None} PATH={MODEL_PATH}")
 
     print("Enter the following infromation exactly in place:\n")
     info = input("num_games depth debug \n")
