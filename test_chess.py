@@ -1,12 +1,18 @@
 import unittest
 import copy
 import os
+import time
+import statistics
+import csv
+from datetime import datetime
+from dataclasses import dataclass, asdict
 
 from chess_board import ChessBoard
 from player import PlayerAction
 from bot import best_move, minimax
 from bot import move_order_score, _passes_opening_sanity, _see, _square_pressure
 from opening_book import choose_book_move
+from bot import best_move, _queen_tactics, _queen_coordination_score
 
 import torch
 from tensor import board_to_tensor
@@ -101,6 +107,58 @@ def set_position(b, white_pieces, black_pieces):
             b.players[color].pieces.append(piece)
 
     b._update_tiles()
+
+
+@dataclass
+class SearchStats:
+    nodes: int = 0
+    qnodes: int = 0
+    leaf_evals: int = 0
+    terminal_hits: int = 0
+    cutoffs: int = 0
+
+    move_order_calls: int = 0
+    move_order_time: float = 0.0
+
+    evaluate_calls: int = 0
+    evaluate_time: float = 0.0
+
+    quiescence_calls: int = 0
+    quiescence_time: float = 0.0
+
+    refresh_calls: int = 0
+    refresh_time: float = 0.0
+
+    snapshot_calls: int = 0
+    snapshot_time: float = 0.0
+
+    restore_calls: int = 0
+    restore_time: float = 0.0
+
+    root_candidates: int = 0
+    root_moves: int = 0
+    book_hit: int = 0
+
+    elapsed: float = 0.0
+    nps: float = 0.0
+
+    @property
+    def total_nodes(self) -> int:
+        return self.nodes + self.qnodes
+
+
+_LAST_SEARCH_STATS = SearchStats()
+
+
+def _reset_search_stats():
+    global _LAST_SEARCH_STATS
+    _LAST_SEARCH_STATS = SearchStats()
+
+
+def get_last_search_stats() -> dict:
+    return asdict(_LAST_SEARCH_STATS) | {
+        "total_nodes": _LAST_SEARCH_STATS.total_nodes
+    }
 
 class ChessTestCase(unittest.TestCase):
     def assertPiece(self, board, square, name=None, color=None):
@@ -1569,6 +1627,130 @@ class TestEvaluateDiagnostics(ChessTestCase):
         self.assertAlmostEqual(w["evaluate_call"], -bl["evaluate_call"], delta=0.05)
 
 
+class TestQueenTactics(ChessTestCase):
+    def queen_at(self, board, square, color):
+        piece = get_piece(board, square)
+        self.assertIsNotNone(piece, f"No piece at {square}")
+        self.assertEqual(piece.name, "Q", f"Expected queen at {square}, got {piece}")
+        self.assertEqual(piece.color, color, f"Expected {color} queen at {square}, got {piece.color}")
+        return piece
+
+    def test_early_queen_development_is_penalized(self):
+        b = ChessBoard()
+
+        # Opening position baseline
+        base = _queen_tactics(b, WHITE)
+
+        # Move queen out early
+        make_move(b, "d2", "d4")
+        make_move(b, "a7", "a6")
+        make_move(b, "d1", "d3")
+
+        moved = _queen_tactics(b, WHITE)
+
+        self.assertLess(
+            moved, base,
+            f"Expected early queen development to be worse. base={base}, moved={moved}"
+        )
+
+    def test_safe_supported_queen_scores_better_than_exposed_queen(self):
+        safe = ChessBoard()
+        set_position(
+            safe,
+            white_pieces=[("K", "g1"), ("Q", "d3"), ("N", "f3"), ("B", "e2")],
+            black_pieces=[("K", "g8")],
+        )
+
+        exposed = ChessBoard()
+        set_position(
+            exposed,
+            white_pieces=[("K", "g1"), ("Q", "d3")],
+            black_pieces=[("K", "g8"), ("R", "d8")],
+        )
+
+        safe_score = _queen_tactics(safe, WHITE)
+        exposed_score = _queen_tactics(exposed, WHITE)
+
+        self.assertGreater(
+            safe_score, exposed_score,
+            f"Expected supported queen to score better. safe={safe_score}, exposed={exposed_score}"
+        )
+
+    def test_hanging_queen_is_penalized(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[("K", "g1"), ("Q", "d4")],
+            black_pieces=[("K", "g8"), ("R", "d8")],
+        )
+
+        score = _queen_tactics(b, WHITE)
+        self.assertLess(score, 0.0, f"Expected hanging queen penalty, got {score}")
+
+    def test_battery_with_rook_on_open_line_scores_positive(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[("K", "g1"), ("R", "d1"), ("Q", "d3")],
+            black_pieces=[("K", "d8"), ("N", "d7")],
+        )
+
+        queen = self.queen_at(b, "d3", WHITE)
+        score = _queen_coordination_score(b, queen, WHITE)
+
+        self.assertGreater(
+            score, 0.0,
+            f"Expected rook-queen battery pressure to score positively, got {score}"
+        )
+
+    def test_bishop_battery_on_diagonal_scores_positive(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[("K", "g1"), ("B", "b1"), ("Q", "c2")],
+            black_pieces=[("K", "h7"), ("R", "g6")],
+        )
+
+        queen = self.queen_at(b, "c2", WHITE)
+        score = _queen_coordination_score(b, queen, WHITE)
+
+        self.assertGreater(
+            score, 0.0,
+            f"Expected bishop-queen diagonal battery to score positively, got {score}"
+        )
+
+    def test_no_battery_bonus_without_rear_support(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[("K", "g1"), ("Q", "d3")],
+            black_pieces=[("K", "d8"), ("N", "d7")],
+        )
+
+        queen = self.queen_at(b, "d3", WHITE)
+        score = _queen_coordination_score(b, queen, WHITE)
+
+        self.assertEqual(
+            score, 0.0,
+            f"Expected no battery score without rook/bishop support, got {score}"
+        )
+
+    def test_no_false_battery_when_friendly_support_is_wrong_piece(self):
+        b = ChessBoard()
+        set_position(
+            b,
+            white_pieces=[("K", "g1"), ("N", "d1"), ("Q", "d3")],
+            black_pieces=[("K", "d8"), ("N", "d7")],
+        )
+
+        queen = self.queen_at(b, "d3", WHITE)
+        score = _queen_coordination_score(b, queen, WHITE)
+
+        self.assertEqual(
+            score, 0.0,
+            f"Expected no battery score with knight behind queen, got {score}"
+        )
+
 class TestKillBotMatePatterns(ChessTestCase):
     """
     Tests the raw kill-bot NN on mate-near positions.
@@ -1870,6 +2052,213 @@ class TestKillBotMatePatterns(ChessTestCase):
         )
 
         print(f"\nMate-net vs neutral: mate_score={mate_score:.4f}, neutral_score={neutral_score:.4f}")
+
+
+class TestSearchRuntimeBenchmark(unittest.TestCase):
+    """
+    Runtime benchmark for minimax search with:
+      - time
+      - node count
+      - nodes/sec
+      - lightweight profiling buckets
+
+    Enable with:
+        RUN_SEARCH_BENCHMARK=1 python -m unittest test_chess.TestSearchRuntimeBenchmark -v
+    """
+
+    def setUp(self):
+        if os.environ.get("RUN_SEARCH_BENCHMARK") != "1":
+            self.skipTest("Set RUN_SEARCH_BENCHMARK=1 to enable runtime benchmark")
+
+        depths_env = os.environ.get("SEARCH_BENCH_DEPTHS", "1,2,3")
+        self.depths = [int(d.strip()) for d in depths_env.split(",")]
+
+        self.repeats = int(os.environ.get("SEARCH_BENCH_REPEATS", "3"))
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        output_dir = "data/test_benchmarks"
+        os.makedirs(output_dir, exist_ok=True)
+
+        csv_filename = f"search_benchmark_{timestamp}.csv"
+        self.csv_path = os.path.join(output_dir, csv_filename)
+
+    # ── Position Builders ─────────────────────────────────────────────
+
+    def _build_opening(self):
+        return ChessBoard()
+
+    def _build_open_game(self):
+        b = ChessBoard()
+        self._play_seq(b, [
+            ("e2", "e4"), ("e7", "e5"),
+            ("g1", "f3"), ("b8", "c6"),
+            ("f1", "c4"), ("f8", "c5"),
+            ("d2", "d3"), ("d7", "d6"),
+        ])
+        return b
+
+    def _build_midgame(self):
+        b = ChessBoard()
+        self._play_seq(b, [
+            ("d2", "d4"), ("d7", "d5"),
+            ("c2", "c4"), ("e7", "e6"),
+            ("g1", "f3"), ("g8", "f6"),
+            ("c1", "g5"), ("f8", "e7"),
+            ("e2", "e3"), ("b8", "d7"),
+        ])
+        return b
+
+    def _build_endgame(self):
+        from test_chess import set_position
+        b = ChessBoard()
+
+        set_position(
+            b,
+            white_pieces=[('K', 'e4'), ('P', 'd5')],
+            black_pieces=[('K', 'e6'), ('P', 'f6')],
+        )
+        return b
+
+    def _play_seq(self, board, moves):
+        for from_sq, to_sq in moves:
+            piece = next(
+                (p for p in board.players[WHITE].pieces + board.players[BLACK].pieces
+                 if p.location == from_sq),
+                None
+            )
+            if piece and to_sq in piece.moves:
+                board._move_piece(piece, to_sq)
+                board._update_tiles()
+
+    def _clone(self, board):
+        import copy
+        return copy.deepcopy(board)
+
+    # ── Benchmark ────────────────────────────────────────────────────
+
+    def test_search_runtime(self):
+        from bot import best_move, get_last_search_stats
+
+        positions = {
+            "opening": self._build_opening(),
+            "open_game": self._build_open_game(),
+            "midgame": self._build_midgame(),
+            "endgame": self._build_endgame(),
+        }
+
+        print("\n=== SEARCH RUNTIME BENCHMARK (WITH NODES) ===")
+        print(f"Depths: {self.depths} | Repeats: {self.repeats}")
+        print(f"CSV Output: {self.csv_path}\n")
+
+        with open(self.csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp",
+                "position",
+                "depth",
+                "run",
+                "time_sec",
+                "nodes",
+                "qnodes",
+                "total_nodes",
+                "nps",
+                "cutoffs",
+                "leaf_evals",
+                "terminal_hits",
+                "move_order_time",
+                "refresh_time",
+                "evaluate_time",
+                "quiescence_time"
+            ])
+
+            overall = {}
+
+            for name, base_board in positions.items():
+                print(f"\n--- Position: {name} ---")
+                overall[name] = {}
+
+                for depth in self.depths:
+                    times = []
+                    nodes_list = []
+                    nps_list = []
+
+                    for i in range(self.repeats):
+                        board = self._clone(base_board)
+
+                        start = time.perf_counter()
+
+                        best_move(
+                            board,
+                            WHITE,
+                            depth=depth,
+                            debug=0,
+                            time_budget=None,
+                            use_opening_book=False,  # IMPORTANT
+                        )
+
+                        elapsed = time.perf_counter() - start
+                        stats = get_last_search_stats()
+
+                        times.append(elapsed)
+                        nodes_list.append(stats.get("total_nodes", 0))
+                        nps_list.append(stats.get("nps", 0))
+
+                        writer.writerow([
+                            datetime.now().isoformat(),
+                            name,
+                            depth,
+                            i,
+                            elapsed,
+                            stats.get("nodes", 0),
+                            stats.get("qnodes", 0),
+                            stats.get("total_nodes", 0),
+                            stats.get("nps", 0),
+                            stats.get("cutoffs", 0),
+                            stats.get("leaf_evals", 0),
+                            stats.get("terminal_hits", 0),
+                            stats.get("move_order_time", 0),
+                            stats.get("refresh_time", 0),
+                            stats.get("evaluate_time", 0),
+                            stats.get("quiescence_time", 0),
+                        ])
+
+                    mean_t = statistics.mean(times)
+                    mean_nodes = statistics.mean(nodes_list)
+                    mean_nps = statistics.mean(nps_list)
+
+                    overall[name][depth] = (mean_t, mean_nodes)
+
+                    print(
+                        f"Depth {depth}: "
+                        f"time={mean_t:.3f}s | "
+                        f"nodes={mean_nodes:.0f} | "
+                        f"nps={mean_nps:.0f}"
+                    )
+
+        # ── Scaling Summary ─────────────────────────────────────────
+
+        print("\n=== DEPTH SCALING SUMMARY ===")
+        for name, depth_map in overall.items():
+            print(f"\n{name}:")
+            prev_t = None
+            prev_n = None
+
+            for depth in sorted(depth_map):
+                t, n = depth_map[depth]
+
+                if prev_t:
+                    print(
+                        f"  depth {depth}: {t:.3f}s (x{t/prev_t:.2f}) | "
+                        f"nodes={n:.0f} (x{n/prev_n:.2f})"
+                    )
+                else:
+                    print(f"  depth {depth}: {t:.3f}s | nodes={n:.0f}")
+
+                prev_t = t
+                prev_n = n
+
+        print("\nBenchmark complete.\n")
 
 
 if __name__ == '__main__':
