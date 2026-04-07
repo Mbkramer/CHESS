@@ -1,4 +1,4 @@
-import copy
+import time
 from pieces import Piece, Pawn, Knight, Bishop, Rook, Queen, King
 from ascii_art import ASCII_PIECES
 from player import Player, PlayerAction
@@ -77,6 +77,8 @@ class ChessBoard:
         self.white_king_location = "e1"
 
         self.phase = "EARLY"
+
+        self.refresh_time = 0.0
 
         self._update_tiles()
 
@@ -237,53 +239,61 @@ class ChessBoard:
 
 
     def _refresh_search_state_for_turn(self, turn: str) -> None:
-        opp = BLACK if turn == WHITE else WHITE
 
-        self._sync_board()
+        t0 = time.perf_counter()
 
-        # Clear stale search flags before regenerating
-        self.players[WHITE].checked = False
-        self.players[BLACK].checked = False
-        self.players[WHITE].possible_moves = []
-        self.players[BLACK].possible_moves = []
+        try:
 
-        # Generate raw moves
-        self.players[WHITE].update_moves(self, self.players[BLACK].actions)
-        self.players[BLACK].update_moves(self, self.players[WHITE].actions)
+            opp = BLACK if turn == WHITE else WHITE
 
-        # Rebuild pressure maps
-        self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
-        self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
+            self._sync_board()
 
-        # Set check flags from current position
-        self.players[WHITE].checked = self._test_check(WHITE)
-        self.players[BLACK].checked = self._test_check(BLACK)
+            # Clear stale search flags before regenerating
+            self.players[WHITE].checked = False
+            self.players[BLACK].checked = False
+            self.players[WHITE].possible_moves = []
+            self.players[BLACK].possible_moves = []
 
-        # Legalize ONLY side to move
-        self._cut_illegal_moves(turn)
+            # Generate raw moves
+            self.players[WHITE].update_moves(self, self.players[BLACK].actions)
+            self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
-        self.players[turn].possible_moves = []
-        for piece in self.players[turn].pieces:
-            for move in piece.moves:
-                self.players[turn].possible_moves.append((piece.location, move))
-                
-                # debug
-                tile = self._get_tile(move)
-                if tile and tile.piece and tile.piece.color == piece.color:
-                    print("BAD SEARCH STATE")
-                    print("turn =", turn)
-                    print("piece =", piece, "at", piece.location)
-                    print("move =", move)
-                    print("occupant =", tile.piece, "at", tile.id)
-                    print("piece.moves =", piece.moves)
-                    raise ValueError(
-                        f"Illegal same-color move survived pruning: {piece} {piece.location}->{move} onto {tile.piece}"
-                    )
+            # Rebuild pressure maps
+            self.pressure_map[WHITE] = self._build_pressure_map(WHITE)
+            self.pressure_map[BLACK] = self._build_pressure_map(BLACK)
 
-        self.players[turn].mated = (
-            self.players[turn].checked and
-            len(self.players[turn].possible_moves) == 0
-        )
+            # Set check flags from current position
+            self.players[WHITE].checked = self._test_check(WHITE)
+            self.players[BLACK].checked = self._test_check(BLACK)
+
+            # Legalize ONLY side to move
+            self._cut_illegal_moves(turn)
+
+            self.players[turn].possible_moves = []
+            for piece in self.players[turn].pieces:
+                for move in piece.moves:
+                    self.players[turn].possible_moves.append((piece.location, move))
+                    
+                    # debug
+                    tile = self._get_tile(move)
+                    if tile and tile.piece and tile.piece.color == piece.color:
+                        print("BAD SEARCH STATE")
+                        print("turn =", turn)
+                        print("piece =", piece, "at", piece.location)
+                        print("move =", move)
+                        print("occupant =", tile.piece, "at", tile.id)
+                        print("piece.moves =", piece.moves)
+                        raise ValueError(
+                            f"Illegal same-color move survived pruning: {piece} {piece.location}->{move} onto {tile.piece}"
+                        )
+
+            self.players[turn].mated = (
+                self.players[turn].checked and
+                len(self.players[turn].possible_moves) == 0
+            )
+
+        finally:
+            self.refresh_time += time.perf_counter() - t0
 
 
     # Remove any move that leaves own king in check.

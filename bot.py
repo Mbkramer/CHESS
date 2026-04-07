@@ -76,8 +76,8 @@ except Exception as e:
     board_to_tensor = None
     print(f"Failed importing board_to_tensor from tensor.py: {e}")
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/pgn_2000_2400_v5.pt")
-MODEL_NAME = "pgn_2000_2400_v5.pt"
+MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/model_v7.pt")
+MODEL_NAME = "model_v7.pt"
 
 MATE_BOT_PATH = os.environ.get("MATE_BOT_PATH", "check_points/kill_bot_v2.pt")
 MATE_BOT_NAME = "kill_bot_v2.pt"
@@ -261,10 +261,10 @@ def _fmt_score(x) -> str:
 
 PAWN_TABLE = [
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-    0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,
-    0.1,  0.1,  0.2,  0.3,  0.3,  0.2,  0.1,  0.1,
-    0.05, 0.05, 0.1,  0.25, 0.25, 0.1,  0.05, 0.05,
-    0.0,  0.0,  0.0,  0.2,  0.2,  0.0,  0.0,  0.0,
+    0.3,  0.3,  0.3,  0.3,  0.3,  0.3,  0.3,  0.3,
+    0.1,  0.15,  0.2,  0.25,  0.25,  0.2,  0.15,  0.1,
+    0.05, 0.1, 0.15,  0.2, 0.2, 0.15,  0.1, 0.05,
+    0.0,  0.0,  0.0,  0.15,  0.15,  0.0,  0.0,  0.0,
     0.05,-0.05,-0.1,  0.0,  0.0, -0.1, -0.05, 0.05,
     0.05, 0.1,  0.1, -0.2, -0.2,  0.1,  0.1,  0.05,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -285,8 +285,8 @@ BISHOP_TABLE = [
     -0.2, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.2,
     -0.1,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.1,
     -0.1,  0.0,  0.05, 0.1,  0.1,  0.05, 0.0, -0.1,
-    -0.1,  0.05, 0.05, 0.1,  0.1,  0.05, 0.05,-0.1,
-    -0.1,  0.0,  0.1,  0.1,  0.1,  0.1,  0.0, -0.1,
+    -0.1,  0.05, 0.05, 0.15,  0.15,  0.05, 0.05,-0.1,
+    -0.1,  0.0,  0.1,  0.15,  0.15,  0.1,  0.0, -0.1,
     -0.1,  0.1,  0.1,  0.1,  0.1,  0.1,  0.1, -0.1,
     -0.1,  0.05, 0.0,  0.0,  0.0,  0.0,  0.05,-0.1,
     -0.2, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.2,
@@ -317,7 +317,7 @@ QUEEN_TABLE = [
 # King wants to stay safe and castled in the middlegame
 KING_TABLE = [
     -0.10,  0.10,  0.20, -0.30, -0.30,  0.20,  0.10, -0.10,  
-     0.15,  0.20,  0.05, -0.05, -0.05,  0.05,  0.20,  0.15, 
+     0.15,  0.10,  0.05, -0.05, -0.05,  0.05,  0.10,  0.15, 
     -0.10, -0.20, -0.20, -0.20, -0.20, -0.20, -0.20, -0.10,  
     -0.20, -0.30, -0.30, -0.40, -0.40, -0.30, -0.30, -0.20, 
     -0.30, -0.40, -0.40, -0.50, -0.50, -0.40, -0.40, -0.30,  
@@ -355,33 +355,39 @@ class EvalParams:
     king_table:   List[float] = field(default_factory=lambda: list(KING_TABLE))
 
     # ── Pawn structure ──
-    doubled_pawn_penalty:   float = 0.30
-    isolated_pawn_penalty:  float = 0.35
-    connected_pawn_bonus:   float = 0.15
-    passed_pawn_base:       float = 0.15 
-    passed_pawn_advance:    float = 0.10
+    doubled_pawn_penalty:           float = 0.30
+    isolated_pawn_penalty:          float = 0.35
+    connected_pawn_bonus:           float = 0.15
+    passed_pawn_base:               float = 0.15 
+    passed_pawn_advance:            float = 0.10
 
     # ── Mobility ──
-    mobility_weight: float = 0.05
+    mobility_weight:                float = 0.05
 
     # ── King safety ──
-    castle_bonus:          float = 0.75
-    pawn_shield_bonus:     float = 0.15
-    open_file_penalty:     float = 0.25
-    semi_open_file_penalty: float = 0.10
-    attacker_proximity_weight: float = 0.15
-    immediate_proximity_penalty: float = 0.12
-    moderate_proximity_penalty: float = 0.05
-
+    castle_bonus:                   float = 0.75
+    pawn_shield_bonus:              float = 0.15
+    open_file_penalty:              float = 0.25
+    semi_open_file_penalty:         float = 0.10
+    attacker_proximity_weight:      float = 0.15
+    immediate_proximity_penalty:    float = 0.12
+    moderate_proximity_penalty:     float = 0.05
 
     # ── Piece bonuses ──
-    bishop_pair_bonus:       float = 0.30
-    rook_open_file_bonus:    float = 0.25
-    rook_semi_open_bonus:    float = 0.10
+    bishop_pair_bonus:              float = 0.30
+    bishop_mobility_bonus:          float = 0.02
+    
+    rook_open_file_bonus:           float = 0.25
+    rook_semi_open_bonus:           float = 0.10
+    loosly_connnected_rooks_bonus:  float = 0.05
+    
+    queen_early_exposure_penalty:   float = 0.20
+    queen_rook_bonus:               float = 0.04
+    queen_bishop_bonus:             float = 0.03 
 
     # ── Hanging pieces ──
-    hanging_outnumbered_weight: float = 0.5
-    hanging_undefended_weight:  float = 0.25
+    hanging_outnumbered_weight:     float = 0.5
+    hanging_undefended_weight:      float = 0.25
 
     # -- Backtrack penalties --
     backtrack_penalty_light: float = 1.0
@@ -702,23 +708,42 @@ def _king_safety(chess_board, color) -> float:
     return score
 
 
-def _bishop_pair(chess_board, color) -> float:
-    bishops = [p for p in chess_board.players[color].pieces if p.name == 'B']
-    return EVAL_PARAMS.bishop_pair_bonus if len(bishops) >= 2 else 0.0
-
-
-def _rook_on_open_file(chess_board, color) -> float:
-    """Bonus for rooks on open or semi-open files."""
+def _bishop_tactics(chess_board, color) -> float:
+    """
+    Bonus for bishop pair, often stronger together than separately.
+    Bonus for bishops controlling long diagonals, but this is somewhat captured by mobility and piece-square tables, so not implemented here.
+    """
     score = 0.0
-    all_pawn_files = {
-        p.location[0]
-        for side in (WHITE, BLACK)
-        for p in chess_board.players[side].pieces
-        if p.name == 'P'
-    }
-    friendly_pawn_files = {
-        p.location[0] for p in chess_board.players[color].pieces if p.name == 'P'
-    }
+
+    bishops = [p for p in chess_board.players[color].pieces if p.name == 'B']
+
+    if len(bishops) >= 2:       # Bonus for bishop pair
+        score += EVAL_PARAMS.bishop_pair_bonus  
+
+    bishop_mobility = sum(len(p.moves) for p in bishops)
+
+    score += EVAL_PARAMS.bishop_mobility_bonus * bishop_mobility  # Bonus for each bishop helping queen mobility
+
+    return score
+
+
+def _rook_tactics(chess_board, color) -> float:
+    """Bonus for rooks on open or semi-open files, or loose connection."""
+    score = 0.0
+
+    all_pawn_files = set()
+    friendly_pawn_files = set()
+    rooks = set()
+
+    for side in (WHITE, BLACK):
+        for p in chess_board.players[side].pieces:
+            if p.name == 'P':
+                all_pawn_files.add(p.location[0])
+            if p.name == 'P' and p.color == color:
+                friendly_pawn_files.add(p.location[0])
+            if p.name == 'R' and p.color == color:
+                rooks.add(p)
+
     for piece in chess_board.players[color].pieces:
         if piece.name != 'R':
             continue
@@ -727,6 +752,17 @@ def _rook_on_open_file(chess_board, color) -> float:
             score += EVAL_PARAMS.rook_open_file_bonus      # fully open file
         elif f not in friendly_pawn_files:
             score += EVAL_PARAMS.rook_semi_open_bonus       # semi-open (no friendly pawn)
+    
+    # Bonus for conncted rooks
+    if len(rooks) >= 2:
+        rook_positions = {(r.location[0], r.location[1]) for r in rooks}
+        for r1 in rooks:
+            for r2 in rooks:
+                if r1 == r2:
+                    continue
+                if r1.location[0] == r2.location[0] or r1.location[1] == r2.location[1]:
+                    score += EVAL_PARAMS.loosly_connnected_rooks_bonus / 2.0  # connected rooks bonus 
+    
     return score
 
 
@@ -884,9 +920,9 @@ def _queen_coordination_score(chess_board, queen, color: str, max_steps: int = 2
                 break
 
             if (df == 0 or dr == 0) and p.name == "R":
-                score += 0.04
+                score += EVAL_PARAMS.queen_rook_bonus
             elif abs(df) == abs(dr) and p.name == "B":
-                score += 0.03
+                score += EVAL_PARAMS.queen_bishop_bonus
 
             break
 
@@ -911,7 +947,7 @@ def _queen_tactics(chess_board, color: str) -> float:
         ply_count = len(getattr(chess_board, "actions", []))
         home = "d1" if color == WHITE else "d8"
         if ply_count <= 12 and piece.location != home:
-            score -= 0.1
+            score -= EVAL_PARAMS.queen_early_exposure_penalty
 
         # Coordination scoring
         score += _queen_coordination_score(chess_board, piece, color)
@@ -920,17 +956,64 @@ def _queen_tactics(chess_board, color: str) -> float:
 
 # --- Evaluatations -----------------------------------------------------------
 
-def evaluate_terminal(chess_board, turn: str, root_color: str, depth: int, repertoire_name="balanced"):
+def evaluate_terminal(chess_board, turn: str, root_color: str, ply: int):
     if len(chess_board.players[turn].possible_moves) == 0:
         if chess_board.players[turn].checked:
             # turn is mated
             if turn == root_color:
-                return -MATE_SCORE + depth
+                return -MATE_SCORE + ply
             else:
-                return MATE_SCORE - depth
+                return MATE_SCORE - ply
         else:
             return 0.0
     return None
+
+
+def evaluate_classical(chess_board, perspective_color, p=None) -> float:
+    """
+    Only classical evaluation based on handcrafted heuristics and piece-square tables.
+    Used primarily for quescence search leaf evaluation.
+    """
+
+    if p is None:
+        p = EVAL_PARAMS
+
+    classical = 0.0
+    for piece in chess_board.players[WHITE].pieces:
+        classical += _piece_value(piece.name, p) + get_position_bonus(piece, p)
+    for piece in chess_board.players[BLACK].pieces:
+        classical -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
+
+    classical += _king_safety(chess_board, WHITE)
+    classical -= _king_safety(chess_board, BLACK)
+
+    classical += _pawn_structure(chess_board, WHITE)
+    classical -= _pawn_structure(chess_board, BLACK)
+
+    classical += _bishop_tactics(chess_board, WHITE)
+    classical -= _bishop_tactics(chess_board, BLACK)
+
+    classical += _rook_tactics(chess_board, WHITE)
+    classical -= _rook_tactics(chess_board, BLACK)
+
+    classical += _queen_tactics(chess_board, WHITE)
+    classical -= _queen_tactics(chess_board, BLACK)
+
+    classical += _mobility(chess_board)
+
+    classical += _hanging_pieces(chess_board, WHITE)
+    classical -= _hanging_pieces(chess_board, BLACK)
+
+    classical += _development_score(chess_board, WHITE)
+    classical -= _development_score(chess_board, BLACK)
+
+    classical -= _repetition_penalty(chess_board, WHITE)
+    classical += _repetition_penalty(chess_board, BLACK)
+
+    if perspective_color == BLACK:
+        classical = -classical
+
+    return classical
 
 
 def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
@@ -973,22 +1056,23 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
         for piece in chess_board.players[BLACK].pieces:
             classical -= _piece_value(piece.name, p) + get_position_bonus(piece, p)
 
-        classical += _pawn_structure(chess_board, WHITE)
-        classical -= _pawn_structure(chess_board, BLACK)
-
-        classical += _mobility(chess_board)
 
         classical += _king_safety(chess_board, WHITE)
         classical -= _king_safety(chess_board, BLACK)
 
-        classical += _bishop_pair(chess_board, WHITE)
-        classical -= _bishop_pair(chess_board, BLACK)
+        classical += _pawn_structure(chess_board, WHITE)
+        classical -= _pawn_structure(chess_board, BLACK)
 
-        classical += _rook_on_open_file(chess_board, WHITE)
-        classical -= _rook_on_open_file(chess_board, BLACK)
+        classical += _bishop_tactics(chess_board, WHITE)
+        classical -= _bishop_tactics(chess_board, BLACK)
+
+        classical += _rook_tactics(chess_board, WHITE)
+        classical -= _rook_tactics(chess_board, BLACK)
 
         classical += _queen_tactics(chess_board, WHITE)
         classical -= _queen_tactics(chess_board, BLACK)
+
+        classical += _mobility(chess_board)
 
         classical += _hanging_pieces(chess_board, WHITE)
         classical -= _hanging_pieces(chess_board, BLACK)
@@ -1675,12 +1759,15 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
     try:
 
         if deadline is not None and time.time() >= deadline:
-            return evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
+            return evaluate_classical(chess_board, perspective_color=root_color)
 
         maximizing = (turn == root_color)
         next_turn = BLACK if turn == WHITE else WHITE
 
-        stand_pat = evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
+        if depth == 0:
+            stand_pat = evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
+        else:
+            stand_pat = evaluate_classical(chess_board, perspective_color=root_color)
 
         # Stand-pat pruning
         if maximizing:
@@ -1701,8 +1788,11 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
         for piece in chess_board.players[turn].pieces:
             for move in piece.moves:
                 target_tile = chess_board._get_tile(move)
+                # Guard against stale moves after restore
+                if target_tile and target_tile.piece and target_tile.piece.color == piece.color:
+                    continue
                 if target_tile and target_tile.piece and target_tile.piece.color != piece.color:
-                    if target_tile.piece.name == "K":
+                    if target_tile and target_tile.piece and target_tile.piece.name == "K":
                         continue
                     victim_val = PIECE_VALUES[target_tile.piece.name]
                     attacker_val = PIECE_VALUES[piece.name]
@@ -1713,18 +1803,16 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
             return stand_pat
 
         captures.sort(key=lambda x: x[2], reverse=True)
+        cap = 12 if chess_board.players[turn].checked else 8
 
-        for piece, move, _ in captures[:8]:
+        for piece, move, _ in captures[:cap]:
             snap = chess_board._snapshot_state()
             try:
                 chess_board._move_piece(piece, move, simulate=True)
+                chess_board._fast_update_tiles()
 
-                # reject illegal self-check branches
-                chess_board._sync_board()
-                if chess_board._test_check(turn):
+                if chess_board._test_check(turn):   # turn = side that just moved
                     continue
-
-                chess_board._refresh_search_state_for_turn(next_turn)
 
                 score = _quiescence(
                     chess_board,
@@ -1791,7 +1879,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
         return evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
 
     # 1. TERMINAL CHECK — FIRST
-    terminal = evaluate_terminal(chess_board, turn, root_color, depth)
+    terminal = evaluate_terminal(chess_board, turn, root_color, ply)
     if terminal is not None:
         _LAST_SEARCH_STATS.terminal_hits += 1
         if debug >= 2:
@@ -1910,14 +1998,12 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             is_forcing = _should_extend(piece, move, chess_board)
 
             chess_board._move_piece(piece, move, simulate=True)
-            
+            chess_board._fast_update_tiles()
+
             # If moving side's king is now in check, this was an illegal move. Skip it.
-            chess_board._sync_board()
-            if chess_board._test_check(turn):   # turn = the side that just moved
-                chess_board._restore_state(snap)
+            if chess_board._test_check(turn):
                 continue
 
-            chess_board._refresh_search_state_for_turn(next_turn)
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
@@ -2095,6 +2181,13 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         root_capture_count = 0
         for piece, move, _ in candidate_moves:
             target_tile = chess_board._get_tile(move)
+
+            # Guard against stale moves after restore
+            if target_tile and target_tile.piece and target_tile.piece.color == piece.color:
+                continue
+            if target_tile and target_tile.piece and target_tile.piece.name == "K":
+                continue
+
             if target_tile and target_tile.piece and target_tile.piece.color != piece.color:
                 root_capture_count += 1
 
@@ -2149,8 +2242,10 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
                 chess_board._refresh_search_state_for_turn(next_turn)
 
                 # Return mated opponent move immediately
-                if len(chess_board.players[next_turn].possible_moves) == 0 and chess_board.players[next_turn].checked:
-                    return (from_sq, move)
+                if chess_board.players[next_turn].checked:
+                    raw_moves = [m for p in chess_board.players[next_turn].pieces for m in p.moves]
+                    if not raw_moves:
+                        return (from_sq, move)
                 
                 if fallback is None:
                     fallback = (from_sq, move)
@@ -2193,7 +2288,7 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
                 best_score = score
                 chosen = (from_sq, move)
                 if debug >= 1:
-                    _debug_log(debug, 2 if debug >= 2 else 1, f"ROOT new best => {chosen} score={_fmt_score(best_score)}")
+                    _debug_log(debug, 2 if debug >= 2 else 1, f"{COLOR[color]} new best => {chosen} score={_fmt_score(best_score)}")
 
             if deadline is not None and time.time() >= deadline:
                 return chosen or fallback
@@ -2219,6 +2314,9 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
         _LAST_SEARCH_STATS.elapsed = time.perf_counter() - t_search_start
         if _LAST_SEARCH_STATS.elapsed > 0:
             _LAST_SEARCH_STATS.nps = _LAST_SEARCH_STATS.total_nodes / _LAST_SEARCH_STATS.elapsed
+
+        _LAST_SEARCH_STATS.refresh_time = chess_board.refresh_time
+        chess_board.refresh_time = 0.0  # reset for next search
 
 
 def main():

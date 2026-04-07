@@ -1451,8 +1451,8 @@ class TestEvaluateDiagnostics(ChessTestCase):
             "model_scaled": model_scaled,
             "model_weight": model_weight,
             "classical_weight": classical_weight,
-            "terminal_white": evaluate_terminal(board, WHITE, WHITE, depth=0, repertoire_name="balanced"),
-            "terminal_black": evaluate_terminal(board, BLACK, WHITE, depth=0, repertoire_name="balanced"),
+            "terminal_white": evaluate_terminal(board, WHITE, WHITE, depth=0),
+            "terminal_black": evaluate_terminal(board, BLACK, WHITE, depth=0),
             "evaluate_call": evaluate(board, color, turn_to_move=color),
         }
 
@@ -2070,10 +2070,10 @@ class TestSearchRuntimeBenchmark(unittest.TestCase):
         if os.environ.get("RUN_SEARCH_BENCHMARK") != "1":
             self.skipTest("Set RUN_SEARCH_BENCHMARK=1 to enable runtime benchmark")
 
-        depths_env = os.environ.get("SEARCH_BENCH_DEPTHS", "1,2,3")
+        depths_env = os.environ.get("SEARCH_BENCH_DEPTHS", "1,2,3,4")
         self.depths = [int(d.strip()) for d in depths_env.split(",")]
 
-        self.repeats = int(os.environ.get("SEARCH_BENCH_REPEATS", "3"))
+        self.repeats = int(os.environ.get("SEARCH_BENCH_REPEATS", "5"))
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
