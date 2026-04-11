@@ -204,6 +204,7 @@ class ChessBoard:
                     
                 tile.place_piece(piece)
 
+
     def _fast_update_tiles(self) -> None:
         self._sync_board()
         for color in COLORS:

@@ -365,7 +365,7 @@ class EvalParams:
     mobility_weight:                float = 0.05
 
     # ── King safety ──
-    castle_bonus:                   float = 0.75
+    castle_bonus:                   float = 0.50
     pawn_shield_bonus:              float = 0.15
     open_file_penalty:              float = 0.25
     semi_open_file_penalty:         float = 0.10
@@ -1268,18 +1268,16 @@ def _early_opening_safety_bonus(board, piece, move) -> float:
 
     return score
 
-def _is_quiet_backtrack(board, piece, move: str) -> bool:
-    """
-    Penalize a side moving the same piece straight back to the square
-    it came from on its previous turn. 
 
-    Example:
-      White: Bc3 -> d2
-      ...
-      White: Bd2 -> c3   <-- penalize
+
+def _is_quiet_backtrack(board, piece, move: str, color: str) -> bool:
     """
-    actions = getattr(board, "actions", [])
-    if len(actions) < 2:
+    Penalize moving the same piece back to the square it came from
+    on its own previous turn. Uses the per-color action list so
+    index -1 is always this side's last move, not the opponent's.
+    """
+    actions = board.players[color].actions   # ← per-color list
+    if len(actions) < 1:
         return False
 
     target_tile = board._get_tile(move)
@@ -1295,23 +1293,22 @@ def _is_quiet_backtrack(board, piece, move: str) -> bool:
     )
     is_castle = _is_castle_move(piece, move)
 
-    # only penalize quiet shuffles
     if is_capture or is_promotion or is_castle:
         return False
 
-    # Check 2 plies back (same side's last move)
-    prev_own_action = actions[-2]
-    if (getattr(prev_own_action, "piece_id", None) == piece.id and
-        getattr(prev_own_action, "to_tile", None) == piece.location and
-        getattr(prev_own_action, "from_tile", None) == move):
+    # Check 1 ply back in THIS color's history (their last move)
+    prev = actions[-1]
+    if (getattr(prev, "piece_id", None) == piece.id and
+        getattr(prev, "to_tile", None) == piece.location and
+        getattr(prev, "from_tile", None) == move):
         return True
 
-    # Also check 4 plies back (catches rook a1->d1->a1 oscillation)
-    if len(actions) >= 4:
-        prev_own_action_2 = actions[-4]
-        if (getattr(prev_own_action_2, "piece_id", None) == piece.id and
-            getattr(prev_own_action_2, "to_tile", None) == piece.location and
-            getattr(prev_own_action_2, "from_tile", None) == move):
+    # Check 2 plies back in THIS color's history
+    if len(actions) >= 2:
+        prev2 = actions[-2]
+        if (getattr(prev2, "piece_id", None) == piece.id and
+            getattr(prev2, "to_tile", None) == piece.location and
+            getattr(prev2, "from_tile", None) == move):
             return True
 
     return False
@@ -1416,9 +1413,8 @@ def _see(board, square: str, color: str, captured_val: float = 0.0) -> float:
 
 
 def _passes_opening_sanity(board, piece, move: str) -> bool:
-    in_opening = _opening_phase(board)  # already defined: ≤10 actions
-    if not in_opening:
-        return True  # only restrict during the opening
+    if not _opening_phase(board):
+        return True
 
     target_tile = board._get_tile(move)
     is_capture = (
@@ -1426,48 +1422,14 @@ def _passes_opening_sanity(board, piece, move: str) -> bool:
         target_tile.piece is not None and
         target_tile.piece.color != piece.color
     )
-    
-    if is_capture:
-        captured_val = PIECE_VALUES[target_tile.piece.name]
-    else:
-        captured_val = 0.0
 
-    in_opening = _opening_phase(board)
+    # Avoid early flank pawn pushes unless tactical
+    if piece.name == "P" and move[0] in ("a", "h") and len(getattr(board, "actions", [])) <= 8 and not is_capture:
+        return False
 
-    if in_opening:
-        # Avoid early flank pawn pushes unless tactical.
-        if piece.name == "P" and move[0] in ("a", "h") and len(getattr(board, "actions", [])) <= 8 and not is_capture:
-            return False
-
-        # Avoid early queen wandering unless tactical.
-        if piece.name == "Q" and len(getattr(board, "actions", [])) <= 8 and not is_capture:
-            return False
-
-    # --- SEE filter: reject any move that drops material for free ---
-    # Simulate placing the piece on the target square, then run SEE.
-    # We check this always (not just opening) since walking into a free
-    # capture is never correct regardless of phase.
-    if not is_capture:
-        # For quiet moves: temporarily place piece on target, check SEE
-        snap = board._snapshot_state()
-        try:
-            board._move_piece(piece, move, simulate=True)
-            board._sync_board()
-            see_score = _see(board, move, captured_val=captured_val, color=piece.color)
-        except Exception:
-            see_score = 0.0
-        finally:
-            board._restore_state(snap)
-
-        # Reject if clearly losing (losing more than a pawn's worth for free)
-        if see_score < -1.0:
-            return False
-
-    if in_opening:
-        # Avoid moving into obvious pressure without compensation (count-based fallback).
-        to_attackers, to_defenders = _square_pressure(board, move, piece.color)
-        if to_attackers['count'] > to_defenders['count'] + 1 and not is_capture:
-            return False
+    # Avoid early queen wandering unless tactical
+    if piece.name == "Q" and len(getattr(board, "actions", [])) <= 8 and not is_capture:
+        return False
 
     return True
 
@@ -1601,13 +1563,15 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
                 see = _see(board, move, captured_val=captured_val, color=mover)
 
                 if see < 0:
-                    score -= 8.0 + 1.25 * abs(see)
-                    if piece.name == "Q":
-                        score -= 4.0
+                    # Quiet move lands on a tactically losing square
+                    score -= 5.0 + 0.75 * abs(see)
                 elif see == 0:
-                    score += 0.25
+                    # Neutral square
+                    score += 0.50
                 else:
-                    score += 1.25 + 0.30 * min(see, 5)
+                    # Safe square with favorable recapture structure —
+                    # raised ceiling so this competes with center/PST bonuses
+                    score += 1.50 + 0.50 * min(see, 3)
 
             finally:
                 board._restore_state(snap)
@@ -1659,23 +1623,9 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
                 repertoire_name=repertoire_name
             )
 
-        # 7. Quiet backtrack penalty
-        if _is_quiet_backtrack(board, piece, move):
+        # 7. Quiet backtrack penalty when not in check
+        if _is_quiet_backtrack(board, piece, move, color or piece.color) and not board.players[piece.color].checked:
             score -= 2.0
-
-        # 7.5. Penalize moving the same piece back to back in late game
-        if color is not None and len(board.players[color].actions) > 2 and LATE == game_phase(board):
-            # logic change.. 
-            # while instead of if.. 
-            # keep penalizing if the same piece is moved multiple times in a row
-            # NOTE This may not have a strong impact as it is triggered in end game, 
-            # where the candidate cap will likely capture all moves regardless of score. 
-            i = -1
-            while board.players[color].actions[i].piece_id == piece.id: 
-                score -= 0.5
-                i -= 1
-                if i == -5:
-                    break
 
         # 8. Quiet move ordering
         if is_quiet:
@@ -1736,6 +1686,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
                     score += 0.2
 
             # Trading Queens - simplify the game when ahead
+            opp = BLACK if piece.color == WHITE else WHITE
             if is_capture and target_tile.piece.name == "Q" and board.players[color].points > board.players[opp].points:
                 score += 0.75
 
@@ -1888,9 +1839,11 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
     # 2. DEPTH LIMIT — run quiescence search instead of raw static eval
     if depth == 0:
+
         _LAST_SEARCH_STATS.leaf_evals += 1
         score = _quiescence(chess_board, alpha, beta, root_color, turn,
                             depth=4, deadline=deadline)
+        
         if debug >= 2:
             _debug_log(debug, ply, f"{role} {COLOR[turn]} leaf eval => {_fmt_score(score)}")
         return score
@@ -1927,32 +1880,11 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             all_moves.append((piece, move, order_score))
 
     all_moves.sort(key=lambda pm: pm[2], reverse=True)
-    history_len = len(getattr(chess_board, "actions", []))
-    total_pieces = len(chess_board.players[WHITE].pieces) + len(chess_board.players[BLACK].pieces)
 
-    candidate_cap = len(all_moves)
-
-    # widen in tactical / endgame spots
-    if chess_board.players[turn].checked:
-        candidate_cap = min(candidate_cap, 20)
-
-    # depth-based cap: deeper = narrower, shallower = wider
-    if depth >= 4:
-        candidate_cap = min(candidate_cap, 14 if history_len > 10 else 16)  # was 8/10
-    elif depth == 3:
-        candidate_cap = min(candidate_cap, 16 if history_len > 10 else 18)  # was 10/12
-    elif depth == 2:
-        candidate_cap = min(candidate_cap, 14)
-    else:
-        candidate_cap = min(candidate_cap, 18)
-
-    # widen in endgames
-    if total_pieces <= 10:
-        candidate_cap = max(candidate_cap, min(len(all_moves), 18))
+    candidate_cap = 20
 
     if len(all_moves) > candidate_cap:
         all_moves = all_moves[:candidate_cap]
-
 
     # No legal moves — stalemate or checkmate
     if not all_moves:
@@ -2003,7 +1935,6 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             # If moving side's king is now in check, this was an illegal move. Skip it.
             if chess_board._test_check(turn):
                 continue
-
 
             if chess_board.players[next_turn].checked:
                 is_forcing = True
@@ -2201,15 +2132,12 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
             approx_king_safety_gap,
         )
 
-        root_cap = 18
+        root_cap = 20
+
         if chess_board.players[color].checked:
-            root_cap = 22
+            root_cap = 24
         elif root_tactical:
-            root_cap = 20
-        elif history_len > 10:
-            root_cap = 16
-        else:
-            root_cap = 14
+            root_cap = 22
 
         if len(candidate_moves) > root_cap and total_pieces > 10:
             candidate_moves = candidate_moves[:root_cap]

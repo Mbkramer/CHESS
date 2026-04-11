@@ -1415,7 +1415,7 @@ class TestEvaluateDiagnostics(ChessTestCase):
         )
 
         phase = game_phase(board)
-        model_scaled = max(min(model_score * 5, 3), -3)
+        model_scaled = max(min(model_score * 3, 3), -3)
 
         ply_count = len(getattr(board, "actions", []))
         if ply_count <= 10:
