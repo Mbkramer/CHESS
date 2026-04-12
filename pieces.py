@@ -5,14 +5,13 @@ COLOR = {"W": "White", "B": "Black"}
 WHITE = 'W'
 BLACK = 'B'
 
-
 PIECES = {
-    "P": {"Pawn", 1},
-    "N": {"Knight", 3},
-    "B": {"Bishop", 3},
-    "R": {"Rook", 5},
-    "Q": {"Queen", 9},
-    "K": {"King", 0},
+    "P": "Pawn",
+    "N": "Knight",
+    "B": "Bishop",
+    "R": "Rook",
+    "Q": "Queen",
+    "K": "King",
 }
 
 def _lookup_tile(board, tile_id: str):
