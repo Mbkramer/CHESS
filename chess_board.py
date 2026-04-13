@@ -56,7 +56,6 @@ class ChessBoard:
 
     # Initialize chess board with 8x8 tiles and starting piece positions for both players
     def __init__(self):
-        
         self.board = []
         self.actions = []
 

@@ -784,6 +784,15 @@ def _hanging_pieces(chess_board, color: str) -> float:
 
     return score
 
+## Repetition penalty
+def _is_meaningful(action) -> bool:
+    """A move is meaningful if it captured, was a pawn move, or involved a castle."""
+    return (
+        getattr(action, 'captured', None) is not None
+        or getattr(action, 'castle', None) is not None
+        or getattr(action, 'piece_name', '') == 'P'
+    )
+
 
 def _repetition_penalty(chess_board, color) -> float:
     """
@@ -791,17 +800,14 @@ def _repetition_penalty(chess_board, color) -> float:
     two squares with no captures, checks, or pawn advances in between.
     Light deterrent only — should not punish legitimate retreats.
     """
+
+    # Never penalize retreats when in check — the move may be forced
+    if chess_board.players[color].checked:
+        return 0.0
+    
     actions = chess_board.players[color].actions
     if len(actions) < 2:
         return 0.0
-
-    def _is_meaningful(action) -> bool:
-        """A move is meaningful if it captured, was a pawn move, or involved a castle."""
-        return (
-            getattr(action, 'captured', None) is not None
-            or getattr(action, 'castle', None) is not None
-            or getattr(action, 'piece_name', '') == 'P'
-        )
 
     penalty = 0.0
 
@@ -1701,6 +1707,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
     """
     Internal quiescence worker with explicit turn tracking.
     Search only captures from noisy positions.
+    Potentially could extend for moves that look checky
     """
 
     t0 = time.perf_counter()
@@ -1735,7 +1742,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
         if depth == 0:
             return stand_pat
 
-        captures = []
+        busy_moves = []
         for piece in chess_board.players[turn].pieces:
             for move in piece.moves:
                 target_tile = chess_board._get_tile(move)
@@ -1748,15 +1755,21 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
                     victim_val = PIECE_VALUES[target_tile.piece.name]
                     attacker_val = PIECE_VALUES[piece.name]
                     order = victim_val * 10 - attacker_val
-                    captures.append((piece, move, order))
+                    busy_moves.append((piece, move, order))
+                if _could_plausibly_give_check(chess_board, piece, move):
+                    check, mate = _move_gives_check(chess_board, piece, move)
+                    if check:
+                        busy_moves.append((piece, move, 10)) 
+                    if mate:
+                        busy_moves.append((piece, move, MATE_SCORE))
 
-        if not captures:
+        if not busy_moves:
             return stand_pat
 
-        captures.sort(key=lambda x: x[2], reverse=True)
+        busy_moves.sort(key=lambda x: x[2], reverse=True)
         cap = 12 if chess_board.players[turn].checked else 8
 
-        for piece, move, _ in captures[:cap]:
+        for piece, move, _ in busy_moves[:cap]:
             snap = chess_board._snapshot_state()
             try:
                 chess_board._move_piece(piece, move, simulate=True)
@@ -1932,12 +1945,26 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             chess_board._move_piece(piece, move, simulate=True)
             chess_board._fast_update_tiles()
 
-            # If moving side's king is now in check, this was an illegal move. Skip it.
             if chess_board._test_check(turn):
                 continue
 
+            # Mate check: if opponent is in check, run legality filter to see if they escape
             if chess_board.players[next_turn].checked:
-                is_forcing = True
+                chess_board._cut_illegal_moves(next_turn)
+                opp_legal = sum(len(p.moves) for p in chess_board.players[next_turn].pieces)
+                if opp_legal == 0:
+                    mate_val = (MATE_SCORE - ply - 1) if next_turn != root_color else (-MATE_SCORE + ply + 1)
+                    found_legal_child = True
+                    if maximizing:
+                        if mate_val > best:
+                            best = mate_val
+                        alpha = max(alpha, best)
+                    else:
+                        if mate_val < best:
+                            best = mate_val
+                        beta = min(beta, best)
+                    chess_board._restore_state(snap)  # need to jump to finally
+                    continue
 
             extension = 1 if (depth == 1 and is_forcing) else 0
 
@@ -2171,8 +2198,9 @@ def best_move(chess_board, color, depth=2, repertoire_name="balanced",
 
                 # Return mated opponent move immediately
                 if chess_board.players[next_turn].checked:
-                    raw_moves = [m for p in chess_board.players[next_turn].pieces for m in p.moves]
-                    if not raw_moves:
+                    chess_board._cut_illegal_moves(next_turn)
+                    legal_count = sum(len(p.moves) for p in chess_board.players[next_turn].pieces)
+                    if legal_count == 0:
                         return (from_sq, move)
                 
                 if fallback is None:
