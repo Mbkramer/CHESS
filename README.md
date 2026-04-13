@@ -54,7 +54,6 @@ The engine implements the complete rules of chess — including castling, en pas
 |---|---|
 | `2p` | Two-player pass-and-play in the terminal |
 | `bot` | Human vs the bot (choose side, optional shot clock) |
-| `aid` | Human plays a real opponent while the bot suggests moves each turn |
 
 All modes support an optional **shot clock** (in minutes) and a **debug flag** (`debug` / `DEBUG`) that prints the search tree. 
 
