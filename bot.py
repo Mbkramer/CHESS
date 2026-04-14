@@ -377,9 +377,10 @@ class EvalParams:
     bishop_pair_bonus:              float = 0.30
     bishop_mobility_bonus:          float = 0.02
     
-    rook_open_file_bonus:           float = 0.25
+    rook_open_file_bonus:           float = 0.20
     rook_semi_open_bonus:           float = 0.10
     loosly_connnected_rooks_bonus:  float = 0.05
+    same_file_as_enemy_king_bonus:  float = 0.10
     
     queen_early_exposure_penalty:   float = 0.20
     queen_rook_bonus:               float = 0.04
@@ -728,7 +729,10 @@ def _bishop_tactics(chess_board, color) -> float:
 
 
 def _rook_tactics(chess_board, color) -> float:
-    """Bonus for rooks on open or semi-open files, or loose connection."""
+    """
+    Bonus for rooks on open or semi-open files, or loose connection.
+    Bonus for rook on same file as enemy king. 
+    """
     score = 0.0
 
     all_pawn_files = set()
@@ -754,15 +758,24 @@ def _rook_tactics(chess_board, color) -> float:
             score += EVAL_PARAMS.rook_semi_open_bonus       # semi-open (no friendly pawn)
     
     # Bonus for conncted rooks
-    if len(rooks) >= 2:
+    if len(rooks) >= 1:
         rook_positions = {(r.location[0], r.location[1]) for r in rooks}
+        
+    if len(rooks) >= 2:
         for r1 in rooks:
             for r2 in rooks:
                 if r1 == r2:
                     continue
                 if r1.location[0] == r2.location[0] or r1.location[1] == r2.location[1]:
                     score += EVAL_PARAMS.loosly_connnected_rooks_bonus / 2.0  # connected rooks bonus 
-    
+
+    # Bonus for rook on same file as enemy king
+    enemy_king_loc = chess_board.black_king_location if color == WHITE else chess_board.white_king_location
+    for r in rooks:
+        if r.location[0] == enemy_king_loc[0]:  # same file as enemy king
+            score += EVAL_PARAMS.same_file_as_enemy_king_bonus
+
+
     return score
 
 
@@ -1743,6 +1756,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
             return stand_pat
 
         busy_moves = []
+        check, mate = False, False
         for piece in chess_board.players[turn].pieces:
             for move in piece.moves:
                 target_tile = chess_board._get_tile(move)
@@ -1767,7 +1781,8 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
             return stand_pat
 
         busy_moves.sort(key=lambda x: x[2], reverse=True)
-        cap = 12 if chess_board.players[turn].checked else 8
+        cap = 14 if check else 10
+        cap = 30 if mate else cap
 
         for piece, move, _ in busy_moves[:cap]:
             snap = chess_board._snapshot_state()
