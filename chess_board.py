@@ -206,6 +206,7 @@ class ChessBoard:
 
     def _fast_update_tiles(self) -> None:
         self._sync_board()
+
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)

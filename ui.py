@@ -62,8 +62,8 @@ INFO_Y        = BOARD_Y + BOARD_PX + 25
 RANK = ['8','7','6','5','4','3','2','1']
 FILE = ['a','b','c','d','e','f','g','h']
 
-BOT_DEPTH       = 2
-BOT_TIME_BUDGET = 60.0
+BOT_DEPTH       = 3
+BOT_TIME_BUDGET = 90.0
 
 PGN_SAVE_DIR = "data/played_games/UI"
 

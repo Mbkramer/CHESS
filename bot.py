@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from chess_board import ChessBoard
 from opening_book import choose_book_move, book_move_bonus
@@ -7,6 +8,12 @@ try:
     import torch
 except Exception:
     torch = None
+
+# Pyinstaller helper for loading assets from bundled executable 
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 from dataclasses import dataclass, asdict
 
@@ -76,10 +83,10 @@ except Exception as e:
     board_to_tensor = None
     print(f"Failed importing board_to_tensor from tensor.py: {e}")
 
-MODEL_PATH = os.environ.get("CHESS_MODEL_PATH", "check_points/model_v7.pt")
+MODEL_PATH = resource_path("check_points/model_v7.pt")
 MODEL_NAME = "model_v7.pt"
 
-MATE_BOT_PATH = os.environ.get("MATE_BOT_PATH", "check_points/kill_bot_v2.pt")
+MATE_BOT_PATH = resource_path("check_points/kill_bot_v2.pt")
 MATE_BOT_NAME = "kill_bot_v2.pt"
 
 print(f"MODEL_PATH={MODEL_PATH}")
@@ -357,7 +364,7 @@ class EvalParams:
     # ── Pawn structure ──
     doubled_pawn_penalty:           float = 0.30
     isolated_pawn_penalty:          float = 0.35
-    connected_pawn_bonus:           float = 0.15
+    connected_pawn_bonus:           float = 0.20
     passed_pawn_base:               float = 0.15 
     passed_pawn_advance:            float = 0.10
 
@@ -391,8 +398,8 @@ class EvalParams:
     hanging_undefended_weight:      float = 0.25
 
     # -- Backtrack penalties --
-    backtrack_penalty_light: float = 1.0
-    backtrack_penalty_strong: float = 2.0
+    backtrack_penalty_light: float = .5
+    backtrack_penalty_strong: float = 1.0
 
 
 # Global instance — used by evaluate() at runtime
@@ -651,6 +658,7 @@ def _king_safety(chess_board, color) -> float:
             min(8, king_col_idx + 2)
         )
     ]
+
     friendly_pawns = {
         p.location for p in chess_board.players[color].pieces if p.name == 'P'
     }
@@ -976,13 +984,10 @@ def _queen_tactics(chess_board, color: str) -> float:
 # --- Evaluatations -----------------------------------------------------------
 
 def evaluate_terminal(chess_board, turn: str, root_color: str, ply: int):
-    if len(chess_board.players[turn].possible_moves) == 0:
+    has_moves = any(len(p.moves) > 0 for p in chess_board.players[turn].pieces)
+    if not has_moves:
         if chess_board.players[turn].checked:
-            # turn is mated
-            if turn == root_color:
-                return -MATE_SCORE + ply
-            else:
-                return MATE_SCORE - ply
+            return -MATE_SCORE + ply if turn == root_color else MATE_SCORE - ply
         else:
             return 0.0
     return None
@@ -1223,7 +1228,7 @@ def _move_gives_check(board, piece, move) -> bool:
 
     target_tile = board._get_tile(move)
     if target_tile and target_tile.piece and target_tile.piece.name == "K":
-        return False
+        return False, False
 
     snap = board._snapshot_state()
 
@@ -1246,7 +1251,7 @@ def _move_gives_check(board, piece, move) -> bool:
         return check, check_mate
 
     except Exception:
-        return False
+        return False, False
     finally:
         board._restore_state(snap)
 
@@ -1756,7 +1761,8 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
             return stand_pat
 
         busy_moves = []
-        check, mate = False, False
+        found_check = False
+        found_mate = False
         for piece in chess_board.players[turn].pieces:
             for move in piece.moves:
                 target_tile = chess_board._get_tile(move)
@@ -1772,17 +1778,18 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
                     busy_moves.append((piece, move, order))
                 if _could_plausibly_give_check(chess_board, piece, move):
                     check, mate = _move_gives_check(chess_board, piece, move)
-                    if check:
-                        busy_moves.append((piece, move, 10)) 
-                    if mate:
+                    if mate: 
+                        found_mate = True
                         busy_moves.append((piece, move, MATE_SCORE))
+                    if check:
+                        found_check = True
+                        busy_moves.append((piece, move, 10)) 
 
         if not busy_moves:
             return stand_pat
 
         busy_moves.sort(key=lambda x: x[2], reverse=True)
-        cap = 14 if check else 10
-        cap = 30 if mate else cap
+        cap = 30 if found_mate else (14 if found_check else 10)
 
         for piece, move, _ in busy_moves[:cap]:
             snap = chess_board._snapshot_state()
@@ -1911,8 +1918,10 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
     candidate_cap = 20
 
-    if len(all_moves) > candidate_cap:
-        all_moves = all_moves[:candidate_cap]
+    # don't cap moves at all if checked
+    if not chess_board.players[turn].checked:
+        if len(all_moves) > candidate_cap:
+            all_moves = all_moves[:candidate_cap]
 
     # No legal moves — stalemate or checkmate
     if not all_moves:
@@ -1962,6 +1971,11 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
             if chess_board._test_check(turn):
                 continue
+
+            if _could_plausibly_give_check(chess_board, piece, move):
+                check, mate = _move_gives_check(chess_board, piece, move)
+                if check:
+                    extension += 1
 
             # Mate check: if opponent is in check, run legality filter to see if they escape
             if chess_board.players[next_turn].checked:

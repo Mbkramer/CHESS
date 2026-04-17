@@ -1369,8 +1369,8 @@ class TestEvaluateDiagnostics(ChessTestCase):
             _pawn_structure,
             _mobility,
             _king_safety,
-            _bishop_pair,
-            _rook_on_open_file,
+            _bishop_tactics,
+            _rook_tactics,
             _hanging_pieces,
             _development_score,
             _repetition_penalty,
@@ -1396,8 +1396,8 @@ class TestEvaluateDiagnostics(ChessTestCase):
         pawn_structure = _pawn_structure(board, WHITE) - _pawn_structure(board, BLACK)
         mobility = _mobility(board)
         king_safety = _king_safety(board, WHITE) - _king_safety(board, BLACK)
-        bishop_pair = _bishop_pair(board, WHITE) - _bishop_pair(board, BLACK)
-        rook_files = _rook_on_open_file(board, WHITE) - _rook_on_open_file(board, BLACK)
+        bishop_pair = _bishop_tactics(board, WHITE) - _bishop_tactics(board, BLACK)
+        rook_files = _rook_tactics(board, WHITE) - _rook_tactics(board, BLACK)
         hanging = _hanging_pieces(board, WHITE) - _hanging_pieces(board, BLACK)
         development = _development_score(board, WHITE) - _development_score(board, BLACK)
         repetition = -_repetition_penalty(board, WHITE) + _repetition_penalty(board, BLACK)
@@ -1451,8 +1451,8 @@ class TestEvaluateDiagnostics(ChessTestCase):
             "model_scaled": model_scaled,
             "model_weight": model_weight,
             "classical_weight": classical_weight,
-            "terminal_white": evaluate_terminal(board, WHITE, WHITE, depth=0),
-            "terminal_black": evaluate_terminal(board, BLACK, WHITE, depth=0),
+            "terminal_white": evaluate_terminal(board, WHITE, WHITE, 0),
+            "terminal_black": evaluate_terminal(board, BLACK, WHITE, 0),
             "evaluate_call": evaluate(board, color, turn_to_move=color),
         }
 

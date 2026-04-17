@@ -496,13 +496,17 @@ class King(Piece):
         # Check up
         if row - 1 >= 1:
             spot = _check_tile_piece(board, f"{chr(ascii_col)}{row - 1}")
-            if spot is None or spot.color != self.color:
+            if spot is None: 
+                self.moves.append(f"{chr(ascii_col)}{row - 1}")
+            elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col)}{row - 1}")
 
         # Check Down
         if row + 1 <= 8:
             spot = _check_tile_piece(board, f"{chr(ascii_col)}{row + 1}")
-            if spot is None or spot.color != self.color:
+            if spot is None: 
+                self.moves.append(f"{chr(ascii_col)}{row + 1}")
+            elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col)}{row + 1}")
 
         # Check all spots to the left
@@ -510,19 +514,25 @@ class King(Piece):
 
             # Straight left
             spot = _check_tile_piece(board, f"{chr(ascii_col - 1)}{row}")
-            if spot is None or spot.color != self.color:
+            if spot is None: 
+                self.moves.append(f"{chr(ascii_col - 1)}{row}")
+            elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col - 1)}{row}")
 
             # Diagonal Left Down
             if row + 1 <= 8:
                 spot = _check_tile_piece(board, f"{chr(ascii_col - 1)}{row + 1}")
-                if spot is None or spot.color != self.color:
+                if spot is None: 
+                    self.moves.append(f"{chr(ascii_col - 1)}{row + 1}")
+                elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - 1)}{row + 1}")
 
             # Diagonal Left Up
             if row - 1 >= 1:
                 spot = _check_tile_piece(board, f"{chr(ascii_col - 1)}{row - 1}")
-                if spot is None or spot.color != self.color:
+                if spot is None: 
+                    self.moves.append(f"{chr(ascii_col - 1)}{row - 1}")
+                elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - 1)}{row - 1}")
 
         # Check all spots to the right
@@ -530,20 +540,27 @@ class King(Piece):
 
             # Straight Right
             spot = _check_tile_piece(board, f"{chr(ascii_col + 1)}{row}")
-            if spot is None or spot.color != self.color:
+            if spot is None: 
+                self.moves.append(f"{chr(ascii_col + 1)}{row}")
+            elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col + 1)}{row}")
 
             # Diagonal Right Down
             if row + 1 <= 8:
                 spot = _check_tile_piece(board, f"{chr(ascii_col + 1)}{row + 1}")
-                if spot is None or spot.color != self.color:
+                if spot is None: 
+                    self.moves.append(f"{chr(ascii_col + 1)}{row + 1}")
+                elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row + 1}")
 
             # Diagonal Right Up
             if row - 1 >= 1:
                 spot = _check_tile_piece(board, f"{chr(ascii_col + 1)}{row - 1}")
-                if spot is None or spot.color != self.color:
+                if spot is None: 
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
+                elif spot.color != self.color:
+                    self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
+
 
         # Castling
         if self.location == self.starting_location and self.check == False:
