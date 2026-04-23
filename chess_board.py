@@ -152,6 +152,8 @@ class ChessBoard:
         self._sync_board()
 
         # 1. Generate raw pseudo-legal moves
+        self.players[WHITE]._clear_actions()
+        self.players[BLACK]._clear_actions()
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)
@@ -207,6 +209,9 @@ class ChessBoard:
     def _fast_update_tiles(self) -> None:
         self._sync_board()
 
+        self.players[WHITE]._clear_actions()
+        self.players[BLACK]._clear_actions()
+
         for color in COLORS:
             opp = BLACK if color == WHITE else WHITE
             self.players[color].update_moves(self, self.players[opp].actions)
@@ -228,6 +233,8 @@ class ChessBoard:
         """
         self._sync_board()
 
+        self.players[WHITE]._clear_actions()
+        self.players[BLACK]._clear_actions()
         self.players[WHITE].update_moves(self, self.players[BLACK].actions)
         self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
@@ -256,6 +263,8 @@ class ChessBoard:
             self.players[BLACK].possible_moves = []
 
             # Generate raw moves
+            self.players[WHITE]._clear_actions()
+            self.players[BLACK]._clear_actions()
             self.players[WHITE].update_moves(self, self.players[BLACK].actions)
             self.players[BLACK].update_moves(self, self.players[WHITE].actions)
 
@@ -358,6 +367,9 @@ class ChessBoard:
                     getattr(piece, "castle", ""),
                     getattr(piece, "starting_location", None),
                     getattr(piece, "check", False),
+                    getattr(piece, "attackers", set()),
+                    getattr(piece, "defenders", set()),
+                    getattr(piece, "attacking", set()),
                 )
 
         return {
@@ -372,8 +384,12 @@ class ChessBoard:
             "mated": {c: self.players[c].mated for c in COLORS},
             "possible_moves": {c: list(self.players[c].possible_moves) for c in COLORS},
             "pressure_maps": {
-                WHITE: dict(self.pressure_map[WHITE]),
-                BLACK: dict(self.pressure_map[BLACK]),
+                WHITE: {sq: {k: list(v) if isinstance(v, list) else v 
+                            for k, v in entry.items()} 
+                        for sq, entry in self.pressure_map[WHITE].items()},
+                BLACK: {sq: {k: list(v) if isinstance(v, list) else v 
+                            for k, v in entry.items()} 
+                        for sq, entry in self.pressure_map[BLACK].items()},
             },
             "white_king_location": self.white_king_location,
             "black_king_location": self.black_king_location,
@@ -400,11 +416,18 @@ class ChessBoard:
                     piece.castle = ps[2]
                     piece.starting_location = ps[3]
                     piece.check = ps[4]
+                    piece.attackers = set(ps[5])
+                    piece.defenders = set(ps[6])
+                    piece.attacking = set(ps[7])
 
         self.actions = list(state["actions"])
         self.pressure_map = {
-            WHITE: dict(state["pressure_maps"][WHITE]),
-            BLACK: dict(state["pressure_maps"][BLACK]),
+            WHITE: {sq: {k: list(v) if isinstance(v, list) else v 
+                        for k, v in entry.items()} 
+                    for sq, entry in state["pressure_maps"][WHITE].items()},
+            BLACK: {sq: {k: list(v) if isinstance(v, list) else v 
+                        for k, v in entry.items()} 
+                    for sq, entry in state["pressure_maps"][BLACK].items()},
         }
         self.white_king_location = state["white_king_location"]
         self.black_king_location = state["black_king_location"]

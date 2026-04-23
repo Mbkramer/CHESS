@@ -65,6 +65,11 @@ class Player:
     def _log_action(self, action: str):
         self.actions.append(action)
 
+    def _clear_actions(self):
+        for piece in self.pieces:
+            piece.atackers = set()
+            piece.attacking = set()
+            piece.defenders = set()
 
     def update_moves(self, chess_board, opp_actions) -> None:
         # Generate raw pseudo-legal moves only

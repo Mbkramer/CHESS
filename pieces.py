@@ -63,6 +63,10 @@ class Piece:
         self.moves = []
         self.taken = False
 
+        self.attackers = set()
+        self.defenders = set()
+        self.attacking = set()
+
     def __str__(self):
         return f"{self.color}{self.name}"
     
@@ -112,13 +116,25 @@ class Pawn(Piece):
         # ── Diagonal captures ────────────────────────────────────────────────
         if col_i > 97:  # has a file to the left
             take_left = f"{chr(col_i - 1)}{cap_row}"
-            if _check_tile_occupied_by_opponent(board, take_left, self.color):
+            spot = _check_tile_piece(board, take_left)
+            if spot is not None and spot.color != self.color:
                 self.moves.append(take_left)
+                opp = _check_tile_piece(board, take_left)
+                self.attacking.add(opp)
+                opp.attackers.add(self)
+            elif spot is not None and spot.color == self.color:
+                spot.defenders.add(self)
 
         if col_i < 104:  # has a file to the right
             take_right = f"{chr(col_i + 1)}{cap_row}"
-            if _check_tile_occupied_by_opponent(board, take_right, self.color):
+            spot = _check_tile_piece(board, take_right)
+            if spot is not None and spot.color != self.color:
                 self.moves.append(take_right)
+                opp = _check_tile_piece(board, take_right)
+                self.attacking.add(opp)
+                opp.attackers.add(self)
+            elif spot is not None and spot.color == self.color:
+                spot.defenders.add(self)
 
         # ── En passant ───────────────────────────────────────────────────────
         # Only possible when this pawn is on the en-passant rank and there
@@ -144,6 +160,7 @@ class Pawn(Piece):
                 ):
                     ep_capture = f"{chr(col_i + delta)}{cap_row}"
                     self.moves.append(ep_capture)
+                    target_pawn.attackers.add(self)
 
 
 class Knight(Piece):
@@ -166,40 +183,88 @@ class Knight(Piece):
         if ascii_col - 1 >= 97:
             if row + 2 <= 8:
                 spot = _check_tile_piece(board, f"{chr(ascii_col - 1)}{row + 2}")
-                if spot is None or spot.color != self.color:
+                if spot is None:
                     self.moves.append(f"{chr(ascii_col - 1)}{row + 2}")
+                elif spot.color != self.color:
+                    self.moves.append(f"{chr(ascii_col - 1)}{row + 2}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
             if row - 2 >= 1:
                 spot = _check_tile_piece(board, f"{chr(ascii_col - 1)}{row - 2}")
-                if spot is None or spot.color != self.color:
+                if spot is None:
                     self.moves.append(f"{chr(ascii_col - 1)}{row - 2}")
+                elif spot.color != self.color:
+                    self.moves.append(f"{chr(ascii_col - 1)}{row - 2}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
             if ascii_col - 2 >= 97:
                 if row + 1 <= 8:
                     spot = _check_tile_piece(board, f"{chr(ascii_col - 2)}{row + 1}")
-                    if spot is None or spot.color != self.color:
+                    if spot is None:
                         self.moves.append(f"{chr(ascii_col - 2)}{row + 1}")
+                    elif spot.color != self.color:
+                        self.moves.append(f"{chr(ascii_col - 2)}{row + 1}")
+                        self.attacking.add(spot)
+                        spot.attackers.add(self)
+                    elif spot.color == self.color:
+                        spot.defenders.add(self)
                 if row - 1 >= 1:
                     spot = _check_tile_piece(board, f"{chr(ascii_col - 2)}{row - 1}")
-                    if spot is None or spot.color != self.color:
+                    if spot is None:
                         self.moves.append(f"{chr(ascii_col - 2)}{row - 1}")
+                    elif spot.color != self.color:
+                        self.moves.append(f"{chr(ascii_col - 2)}{row - 1}")
+                        self.attacking.add(spot)
+                        spot.attackers.add(self)
+                    elif spot.color == self.color:
+                        spot.defenders.add(self)
 
         if ascii_col + 1 <= 104:
             if row + 2 <= 8:
                 spot = _check_tile_piece(board, f"{chr(ascii_col + 1)}{row + 2}")
-                if spot is None or spot.color != self.color:
+                if spot is None:
                     self.moves.append(f"{chr(ascii_col + 1)}{row + 2}")
+                elif spot.color != self.color:
+                    self.moves.append(f"{chr(ascii_col + 1)}{row + 2}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
             if row - 2 >= 1:
                 spot = _check_tile_piece(board, f"{chr(ascii_col + 1)}{row - 2}")
-                if spot is None or spot.color != self.color:
+                if spot is None:
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 2}")
+                elif spot.color != self.color:
+                    self.moves.append(f"{chr(ascii_col + 1)}{row - 2}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
             if ascii_col + 2 <= 104:
                 if row + 1 <= 8:
                     spot = _check_tile_piece(board, f"{chr(ascii_col + 2)}{row + 1}")
-                    if spot is None or spot.color != self.color:
+                    if spot is None:
                         self.moves.append(f"{chr(ascii_col + 2)}{row + 1}")
+                    elif spot.color != self.color:
+                        self.moves.append(f"{chr(ascii_col + 2)}{row + 1}")
+                        self.attacking.add(spot)
+                        spot.attackers.add(self)
+                    elif spot.color == self.color:
+                        spot.defenders.add(self)
                 if row - 1 >= 1:
                     spot = _check_tile_piece(board, f"{chr(ascii_col + 2)}{row - 1}")
-                    if spot is None or spot.color != self.color:
+                    if spot is None:
                         self.moves.append(f"{chr(ascii_col + 2)}{row - 1}")
+                    elif spot.color != self.color:
+                        self.moves.append(f"{chr(ascii_col + 2)}{row - 1}")
+                        self.attacking.add(spot)
+                        spot.attackers.add(self)
+                    elif spot.color == self.color:
+                        spot.defenders.add(self)
 
 
 class Bishop(Piece):
@@ -230,6 +295,11 @@ class Bishop(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -244,6 +314,11 @@ class Bishop(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -258,6 +333,11 @@ class Bishop(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -272,6 +352,11 @@ class Bishop(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -304,6 +389,11 @@ class Rook(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -316,6 +406,11 @@ class Rook(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -328,6 +423,11 @@ class Rook(Piece):
                     self.moves.append(f"{chr(ascii_col)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -340,6 +440,11 @@ class Rook(Piece):
                     self.moves.append(f"{chr(ascii_col)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -372,6 +477,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -386,6 +496,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -400,6 +515,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -414,6 +534,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -428,6 +553,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col - i)}{row}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - i)}{row}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -440,6 +570,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col + i)}{row}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + i)}{row}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -452,6 +587,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col)}{row - i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col)}{row - i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -464,6 +604,11 @@ class Queen(Piece):
                     self.moves.append(f"{chr(ascii_col)}{row + i}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col)}{row + i}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                    break
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
                     break
                 else:
                     break
@@ -500,6 +645,10 @@ class King(Piece):
                 self.moves.append(f"{chr(ascii_col)}{row - 1}")
             elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col)}{row - 1}")
+                self.attacking.add(spot)
+                spot.attackers.add(self)
+            elif spot.color == self.color:
+                spot.defenders.add(self)
 
         # Check Down
         if row + 1 <= 8:
@@ -508,6 +657,10 @@ class King(Piece):
                 self.moves.append(f"{chr(ascii_col)}{row + 1}")
             elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col)}{row + 1}")
+                self.attacking.add(spot)
+                spot.attackers.add(self)
+            elif spot.color == self.color:
+                spot.defenders.add(self)
 
         # Check all spots to the left
         if ascii_col - 1 >= 97:
@@ -518,6 +671,10 @@ class King(Piece):
                 self.moves.append(f"{chr(ascii_col - 1)}{row}")
             elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col - 1)}{row}")
+                self.attacking.add(spot)
+                spot.attackers.add(self)
+            elif spot.color == self.color:
+                spot.defenders.add(self)
 
             # Diagonal Left Down
             if row + 1 <= 8:
@@ -526,6 +683,10 @@ class King(Piece):
                     self.moves.append(f"{chr(ascii_col - 1)}{row + 1}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - 1)}{row + 1}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
 
             # Diagonal Left Up
             if row - 1 >= 1:
@@ -534,6 +695,10 @@ class King(Piece):
                     self.moves.append(f"{chr(ascii_col - 1)}{row - 1}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col - 1)}{row - 1}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
 
         # Check all spots to the right
         if ascii_col + 1 <= 104:
@@ -544,6 +709,10 @@ class King(Piece):
                 self.moves.append(f"{chr(ascii_col + 1)}{row}")
             elif spot.color != self.color:
                 self.moves.append(f"{chr(ascii_col + 1)}{row}")
+                self.attacking.add(spot)
+                spot.attackers.add(self)
+            elif spot.color == self.color:
+                spot.defenders.add(self)
 
             # Diagonal Right Down
             if row + 1 <= 8:
@@ -552,6 +721,10 @@ class King(Piece):
                     self.moves.append(f"{chr(ascii_col + 1)}{row + 1}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row + 1}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
 
             # Diagonal Right Up
             if row - 1 >= 1:
@@ -560,6 +733,10 @@ class King(Piece):
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
                 elif spot.color != self.color:
                     self.moves.append(f"{chr(ascii_col + 1)}{row - 1}")
+                    self.attacking.add(spot)
+                    spot.attackers.add(self)
+                elif spot.color == self.color:
+                    spot.defenders.add(self)
 
 
         # Castling

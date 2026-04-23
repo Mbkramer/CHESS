@@ -323,7 +323,7 @@ QUEEN_TABLE = [
 
 # King wants to stay safe and castled in the middlegame
 KING_TABLE = [
-    -0.10,  0.10,  0.20, -0.30, -0.30,  0.20,  0.10, -0.10,  
+    -0.15,  0.10,  0.20, -0.30, -0.30,  0.20,  0.10, -0.15,  
      0.15,  0.10,  0.05, -0.05, -0.05,  0.05,  0.10,  0.15, 
     -0.10, -0.20, -0.20, -0.20, -0.20, -0.20, -0.20, -0.10,  
     -0.20, -0.30, -0.30, -0.40, -0.40, -0.30, -0.30, -0.20, 
@@ -374,15 +374,20 @@ class EvalParams:
     # ── King safety ──
     castle_bonus:                   float = 0.50
     pawn_shield_bonus:              float = 0.15
+    pawn_shield_threat_penalty:     float = 0.10
     open_file_penalty:              float = 0.25
     semi_open_file_penalty:         float = 0.10
     attacker_proximity_weight:      float = 0.15
-    immediate_proximity_penalty:    float = 0.12
-    moderate_proximity_penalty:     float = 0.05
+    immediate_proximity_penalty:    float = 0.50
+    moderate_proximity_penalty:     float = 0.25
 
     # ── Piece bonuses ──
     bishop_pair_bonus:              float = 0.30
     bishop_mobility_bonus:          float = 0.02
+
+    linked_knight_bonus:            float = 0.10
+    knight_fork_bonus:              float = 0.10
+    free_knight_fork_bonus:         float = 0.15
     
     rook_open_file_bonus:           float = 0.20
     rook_semi_open_bonus:           float = 0.10
@@ -452,6 +457,19 @@ def _search_legal_moves(chess_board, turn: str, repertoire_name="balanced"):
         )
         moves.append((piece, move, order_score))
     return moves
+
+def _distance(sq1: str, sq2: str) -> int:
+    """
+    Chebyshev distance between two squares.
+    Equivalent to king move distance on a chessboard.
+    """
+    f1 = COLUMNS.index(sq1[0])
+    r1 = int(sq1[1])
+
+    f2 = COLUMNS.index(sq2[0])
+    r2 = int(sq2[1])
+
+    return max(abs(f1 - f2), abs(r1 - r2))
 
 
 # --- Search depth handling ----------------------------------------------
@@ -594,8 +612,10 @@ def _pawn_structure(chess_board, color) -> float:
             for opp_r in opp_pawn_rows.get(f, [])
         )
         if is_passed:
-            # Bonus scales with how far advanced the pawn is
+            # Bonus scales with how far advanced the pawn is and is boosted in late game.
             advancement = (row - 1) if color == WHITE else (8 - row)
+            if game_phase(chess_board) == LATE:
+                advancement *= 1.5
             score += EVAL_PARAMS.passed_pawn_base + EVAL_PARAMS.passed_pawn_advance * advancement
 
     return score
@@ -707,10 +727,18 @@ def _king_safety(chess_board, color) -> float:
 
             sq = f"{COLUMNS[file_idx]}{rank}"
 
-            if chess_board._is_square_attacked(sq, opponent):
-                # Heavier penalty for immediate ring
-                if max(abs(df), abs(dr)) == 1:
+            attackers, defenders = _square_pressure(chess_board, sq, color)
+
+            # Heavier penalty for immediate ring
+            if max(abs(df), abs(dr)) == 1:
+
+                if attackers['count'] >= 2 and defenders['count'] <= 1:
+                    score -= EVAL_PARAMS.immediate_proximity_penalty * 2
+                else:
                     score -= EVAL_PARAMS.immediate_proximity_penalty
+            else:
+                if attackers['count'] >= 2 and defenders['count'] <= 1:
+                    score -= EVAL_PARAMS.moderate_proximity_penalty * 2
                 else:
                     score -= EVAL_PARAMS.moderate_proximity_penalty
             
@@ -732,6 +760,31 @@ def _bishop_tactics(chess_board, color) -> float:
     bishop_mobility = sum(len(p.moves) for p in bishops)
 
     score += EVAL_PARAMS.bishop_mobility_bonus * bishop_mobility  # Bonus for each bishop helping queen mobility
+
+    return score
+
+def _knight_tactics(chess_board, color) -> float:
+    """
+    Bonus for linked knights
+    Bonus for knight forks and free knigh forks
+    """
+
+    score = 0.0
+
+    for knight in chess_board.players[color].pieces:
+        if knight.name != 'N':
+            continue
+        
+        #linked knights
+        for defender in knight.defenders:
+            if defender.name == 'N' and defender.color == color:
+                score += EVAL_PARAMS.linked_knight_bonus/2
+
+
+        if len(knight.attacking) >= 2 and len(knight.attackers) == 0:
+            score += EVAL_PARAMS.free_knight_fork_bonus
+        elif len(knight.attacking) >= 2:
+            score += EVAL_PARAMS.knight_fork_bonus
 
     return score
 
@@ -766,23 +819,15 @@ def _rook_tactics(chess_board, color) -> float:
             score += EVAL_PARAMS.rook_semi_open_bonus       # semi-open (no friendly pawn)
     
     # Bonus for conncted rooks
-    if len(rooks) >= 1:
-        rook_positions = {(r.location[0], r.location[1]) for r in rooks}
+    for rook in rooks:
+        for defender in rook.defenders:
+            if defender.name == 'R' and defender.color == color:
+                score += EVAL_PARAMS.loosly_connnected_rooks_bonus/2
         
-    if len(rooks) >= 2:
-        for r1 in rooks:
-            for r2 in rooks:
-                if r1 == r2:
-                    continue
-                if r1.location[0] == r2.location[0] or r1.location[1] == r2.location[1]:
-                    score += EVAL_PARAMS.loosly_connnected_rooks_bonus / 2.0  # connected rooks bonus 
-
-    # Bonus for rook on same file as enemy king
-    enemy_king_loc = chess_board.black_king_location if color == WHITE else chess_board.white_king_location
-    for r in rooks:
-        if r.location[0] == enemy_king_loc[0]:  # same file as enemy king
+        # Bonus for rook on same file as enemy king
+        enemy_king_loc = chess_board.black_king_location if color == WHITE else chess_board.white_king_location
+        if rook.location[0] == enemy_king_loc[0]:  # same file as enemy king
             score += EVAL_PARAMS.same_file_as_enemy_king_bonus
-
 
     return score
 
@@ -1017,6 +1062,9 @@ def evaluate_classical(chess_board, perspective_color, p=None) -> float:
     classical += _bishop_tactics(chess_board, WHITE)
     classical -= _bishop_tactics(chess_board, BLACK)
 
+    classical += _knight_tactics(chess_board, WHITE)
+    classical -= _knight_tactics(chess_board, BLACK)
+
     classical += _rook_tactics(chess_board, WHITE)
     classical -= _rook_tactics(chess_board, BLACK)
 
@@ -1089,6 +1137,9 @@ def evaluate(chess_board, perspective_color, turn_to_move, p=None) -> float:
 
         classical += _bishop_tactics(chess_board, WHITE)
         classical -= _bishop_tactics(chess_board, BLACK)
+
+        classical += _knight_tactics(chess_board, WHITE)
+        classical -= _knight_tactics(chess_board, BLACK)
 
         classical += _rook_tactics(chess_board, WHITE)
         classical -= _rook_tactics(chess_board, BLACK)
@@ -1537,7 +1588,8 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             
         score = 0.0
 
-        # Always define this first
+        # Always define these first
+        phase = game_phase(board)
         target_tile = board._get_tile(move)
 
         is_capture = (
@@ -1611,7 +1663,7 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
         if forcing and see >= 0:
             score += 0.15
 
-        # 4. Castling
+        # 4. Castling 
         if piece.color == WHITE and piece.name == "K":
             if piece.location == "e1" and move in ("c1", "g1"):
                 score += 5.0
@@ -1619,10 +1671,19 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             if piece.location == "e8" and move in ("c8", "g8"):
                 score += 5.0
 
+        # King Safety - If piece is pawn by king and has low safety, prioritize move
+        # Imperfect - doesn't attacker lines so it may push a pawn out of the way, 
+        # but not in the way of opponent support
+        king_location = board.white_king_location if piece.color == WHITE else board.black_king_location
+        if _distance(king_location, piece.location) <= 1 and piece.name == "P":
+            attackers, defenders = _square_pressure(board, piece.location, piece.color)  # update pressure for accurate safety assessment
+            if attackers['count'] >= 2 and defenders['count'] <= 1:
+                score += .5
+                    
         history_len = len(getattr(board, "actions", []))
 
         # 5. Center / development only early
-        if history_len <= 12:
+        if phase == EARLY:
             center_bonus = {
                 'd4': 0.8, 'e4': 0.8, 'd5': 0.8, 'e5': 0.8,
                 'c3': 0.3, 'd3': 0.3, 'e3': 0.3, 'f3': 0.3,
@@ -1631,6 +1692,9 @@ def move_order_score(board, piece, move, color=None, repertoire_name="balanced")
             }
             score += center_bonus.get(move, 0.0)
             score += _early_opening_safety_bonus(board, piece, move)
+
+            if piece.name in ("N", "B", "P"): # Activate minor pieces and pawns early
+                score += 0.25
 
         # 5.5 Lightweight piece-location improvement bonus
         pst_delta = _pst_delta_for_move(piece, move)
@@ -1795,7 +1859,7 @@ def _quiescence(chess_board, alpha: float, beta: float, root_color: str,
             snap = chess_board._snapshot_state()
             try:
                 chess_board._move_piece(piece, move, simulate=True)
-                chess_board._fast_update_tiles()
+                chess_board._fast_update_tiles() #Trying with normal update tyles
 
                 if chess_board._test_check(turn):   # turn = side that just moved
                     continue
@@ -1860,11 +1924,14 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
     role = "MAX" if maximizing else "MIN"
     next_turn = BLACK if turn == WHITE else WHITE
 
+    if chess_board.players[turn].checked:
+        chess_board._cut_illegal_moves(turn)
+
     # Time cutoff check 
     if deadline is not None and time.time() >= deadline:
         return evaluate(chess_board, perspective_color=root_color, turn_to_move=turn)
 
-    # 1. TERMINAL CHECK — FIRST
+    # 2. TERMINAL CHECK (now reliable because checked positions are legalized)
     terminal = evaluate_terminal(chess_board, turn, root_color, ply)
     if terminal is not None:
         _LAST_SEARCH_STATS.terminal_hits += 1
@@ -1872,18 +1939,16 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
             _debug_log(debug, ply, f"{role} {COLOR[turn]} terminal => {_fmt_score(terminal)}")
         return terminal
 
-    # 2. DEPTH LIMIT — run quiescence search instead of raw static eval
+    # 3. DEPTH LIMIT — run quiescence search
     if depth == 0:
-
         _LAST_SEARCH_STATS.leaf_evals += 1
         score = _quiescence(chess_board, alpha, beta, root_color, turn,
                             depth=4, deadline=deadline)
-        
         if debug >= 2:
             _debug_log(debug, ply, f"{role} {COLOR[turn]} leaf eval => {_fmt_score(score)}")
         return score
 
-    # Gather legal moves for side to move
+    # Gather moves — checked positions already legalized above
     all_moves = []
     for piece in chess_board.players[turn].pieces:
         for move in piece.moves:
@@ -1892,6 +1957,9 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 continue
             if target_tile and target_tile.piece and target_tile.piece.name == "K":
                 continue
+            if piece.name == "K" and _distance(piece.location, move) == 2:
+                if piece.check:
+                    continue
 
             order_score = move_order_score(
                 chess_board,
@@ -1965,6 +2033,7 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
 
         try:
             is_forcing = _should_extend(piece, move, chess_board)
+            extension = 1 if (depth == 1 and is_forcing) else 0
 
             chess_board._move_piece(piece, move, simulate=True)
             chess_board._fast_update_tiles()
@@ -1976,6 +2045,8 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                 check, mate = _move_gives_check(chess_board, piece, move)
                 if check:
                     extension += 1
+                if mate:
+                    extension += 2
 
             # Mate check: if opponent is in check, run legality filter to see if they escape
             if chess_board.players[next_turn].checked:
@@ -1994,8 +2065,6 @@ def minimax(chess_board, depth: int, turn: str, root_color: str,
                         beta = min(beta, best)
                     chess_board._restore_state(snap)  # need to jump to finally
                     continue
-
-            extension = 1 if (depth == 1 and is_forcing) else 0
 
             if will_show and extension:
                 _debug_log(debug, ply + 2, "forcing extension +1")
