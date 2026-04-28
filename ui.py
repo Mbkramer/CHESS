@@ -268,10 +268,10 @@ def draw_hud(surface, board, turn, mode, human_color,
     y += 22
 
     pts = font_sm.render(
-        f"W: {board.players[WHITE].points} pts   "
-        f"B: {board.players[BLACK].points} pts   "
-        f"Taken — W: {board.players[WHITE].taken_pieces_str}  "
-        f"B: {board.players[BLACK].taken_pieces_str}",
+        f"White: {board.players[WHITE].points} pts   "
+        f"Black: {board.players[BLACK].points} pts   "
+        f"Taken — White: {board.players[WHITE].taken_pieces_str}  "
+        f"Black: {board.players[BLACK].taken_pieces_str}",
         True, CL_GRAY_LIGHT)
     surface.blit(pts, (BOARD_X, y)); y += 18
 
@@ -711,9 +711,9 @@ def draw_live_hud(surface, board, turn, status_lines, right_lines, game_over_msg
     y += 20
 
     pts = font_sm.render(
-        f"W: {board.players[WHITE].points} pts  B: {board.players[BLACK].points} pts"
-        f"  | W taken: {board.players[WHITE].taken_pieces_str}"
-        f"  B taken: {board.players[BLACK].taken_pieces_str}",
+        f"White: {board.players[WHITE].points} pts  Black: {board.players[BLACK].points} pts"
+        f"  | White taken: {board.players[WHITE].taken_pieces_str}"
+        f"  Black taken: {board.players[BLACK].taken_pieces_str}",
         True, CL_GRAY_LIGHT)
     surface.blit(pts, (BOARD_X, y)); y += 17
 

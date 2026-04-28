@@ -383,7 +383,8 @@ class EvalParams:
 
     # ── Piece bonuses ──
     bishop_pair_bonus:              float = 0.30
-    bishop_mobility_bonus:          float = 0.02
+    bishop_mobility_bonus:          float = 0.01
+    bishop_blocking_pawns_penalty:  float = 0.01
 
     linked_knight_bonus:            float = 0.10
     knight_fork_bonus:              float = 0.10
@@ -394,7 +395,7 @@ class EvalParams:
     loosly_connnected_rooks_bonus:  float = 0.05
     same_file_as_enemy_king_bonus:  float = 0.10
     
-    queen_early_exposure_penalty:   float = 0.20
+    queen_early_exposure_penalty:   float = 0.25
     queen_rook_bonus:               float = 0.04
     queen_bishop_bonus:             float = 0.03 
 
@@ -749,10 +750,18 @@ def _bishop_tactics(chess_board, color) -> float:
     """
     Bonus for bishop pair, often stronger together than separately.
     Bonus for bishops controlling long diagonals, but this is somewhat captured by mobility and piece-square tables, so not implemented here.
+    Penalty for pawns on bishop colored tiles. 
     """
     score = 0.0
 
-    bishops = [p for p in chess_board.players[color].pieces if p.name == 'B']
+    bishops = []
+    pawns = []
+
+    for p in chess_board.players[color].pieces:
+        if p.name == 'B':
+            bishops.append(p)
+        elif p.name == 'P':
+            pawns.append(p)
 
     if len(bishops) >= 2:       # Bonus for bishop pair
         score += EVAL_PARAMS.bishop_pair_bonus  
@@ -760,6 +769,11 @@ def _bishop_tactics(chess_board, color) -> float:
     bishop_mobility = sum(len(p.moves) for p in bishops)
 
     score += EVAL_PARAMS.bishop_mobility_bonus * bishop_mobility  # Bonus for each bishop helping queen mobility
+
+    for b in bishops:
+        for p in pawns:
+            if _square_index(p.location, color) % 2 == _square_index(b.location, color) % 2:
+                score -= EVAL_PARAMS.bishop_blocking_pawns_penalty
 
     return score
 
